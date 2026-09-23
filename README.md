@@ -105,6 +105,11 @@ python -m venv .venv
 
 # 3. CUDA-enabled PyTorch — must be installed LAST, see the gotcha below
 .venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu121 --force-reinstall --no-deps
+
+# 4. Drop the GPU build of ONNX Runtime — Demucs never uses it, and it
+#    conflicts with the plain build (they share one folder)
+.venv\Scripts\python.exe -m pip uninstall -y onnxruntime-gpu onnxruntime
+.venv\Scripts\python.exe -m pip install onnxruntime
 ```
 
 ### Verify
@@ -412,6 +417,18 @@ The implementation reads the file in 1 MB chunks rather than all at once. For a
 loading whole files into memory is a habit that bites hard on a machine with
 limited RAM.
 
+### `shifts` — separating the same song more than once
+
+Demucs can separate a song several times, each at a slightly different time
+offset, then average the results. Small random misalignments in the model's
+output cancel out, so the stems come back marginally cleaner. The library
+default is `2`.
+
+The cost is memory: each pass needs its own full-size result buffer, and they
+are held simultaneously. **This project uses `shifts: 1`** — one pass, half the
+peak memory, roughly twice as fast. On an 8 GB machine that is the difference
+between finishing and crashing, and the quality difference is small.
+
 ### Why a GPU matters here
 
 Neural networks are mostly large matrix multiplications. A CPU has a handful of
@@ -420,10 +437,15 @@ better — often 10–20× faster here.
 
 The second benefit is memory. This machine has 8 GB of system RAM (only ~5.9 GB
 visible to applications, the rest reserved for integrated graphics). Running
-the model on the CPU competes for that same pool, and running out does not
-produce a helpful error — Windows simply terminates the process, with no
-traceback. Running on the GPU's dedicated 4 GB of VRAM sidesteps the contest
-entirely.
+the model on the CPU makes it compete for that same pool; running it on the
+GPU's dedicated 4 GB of VRAM sidesteps the contest.
+
+Note what the GPU does **not** solve. It holds the model and whichever chunk of
+audio is being processed, but each finished chunk is written back into ordinary
+RAM, where the full-length result is assembled. That assembly is what ran out
+of room and crashed — see the `shifts` note above and the crash writeup in
+§7. VRAM and RAM are separate pools doing separate jobs; neither substitutes
+for the other.
 
 **Current setup:** NVIDIA RTX 3050 Laptop (4 GB VRAM), `torch 2.5.1+cu121`,
 driver supporting CUDA 12.5.
@@ -467,12 +489,64 @@ of problem disappears.
 
 ### The process vanished mid-run, with no error and no traceback
 
-Running `htdemucs_ft` (four models back to back) on the CPU exhausted system
-RAM. The Windows out-of-memory killer terminates processes silently — no
-exception, no message, just a returned prompt and no output files.
+Separation reached `52/52`, then the process disappeared — no exception, no
+message, just a returned prompt and an empty cache folder.
 
-**Lesson:** when a long-running process disappears without an error, suspect
-memory before suspecting a bug.
+Running it under `-X faulthandler` turned the silent death into a real report:
+
+```
+Windows fatal exception: access violation
+  File ".../demucs/apply.py", line 217 in apply_model
+$LASTEXITCODE → -1073741819
+```
+
+Exit code `-1073741819` is `0xC0000005`, an access violation — a crash inside
+compiled code, which ordinary Python error handling never sees.
+
+**The cause:** Demucs defaults to `shifts: 2`, meaning it separates the whole
+song twice at slightly different time offsets and averages the results for a
+small quality gain. Line 217 is where the *second* pass allocates its own
+~500MB result buffer while the first pass's buffer is still held. With only
+0.64 GB of RAM free, that allocation failed — and failed as a hard crash
+rather than a clean `MemoryError`.
+
+**Fix:** `shifts: 1` in `separate.py`. One pass, half the peak memory, about
+twice as fast, marginally less polished output.
+
+**Lesson:** `python -X faulthandler` is the tool for a process that dies
+without a traceback. It prints a Python stack even when the crash happens
+inside a C/C++ library. Pair it with `$LASTEXITCODE` to distinguish a crash
+(`-1073741819`) from a clean exit.
+
+*(An earlier version of this file blamed a "Windows out-of-memory killer".
+That was wrong — Windows has no such thing, and the run being blamed had
+actually completed. The real cause is the one above.)*
+
+### Both `onnxruntime` and `onnxruntime-gpu` installed at once
+
+`audio-separator[gpu]` pulls in `onnxruntime-gpu`, which installs into the
+**same folder** as plain `onnxruntime`, so the two overwrite each other. The
+GPU build also tried to load CUDA 13 libraries into a process already holding
+PyTorch's CUDA 12 ones:
+
+```
+WARNING: onnxruntime-gpu is built with CUDA 13.x ...
+Failed to load cublas64_13.dll
+```
+
+This turned out **not** to be the cause of the crash above, but it is a
+genuinely broken state worth clearing. Demucs runs on PyTorch and never touches
+ONNX Runtime — that is only used by the MDX and VR model families — so the
+plain CPU build is all that is needed:
+
+```powershell
+.venv\Scripts\python.exe -m pip uninstall -y onnxruntime-gpu onnxruntime
+.venv\Scripts\python.exe -m pip install onnxruntime
+```
+
+**Lesson:** two packages that install into one namespace cannot coexist. And a
+plausible suspect is not a confirmed cause — this one was ruled out by testing,
+not by argument.
 
 ### `torch.cuda.is_available()` returned `False` after installing the CUDA build
 

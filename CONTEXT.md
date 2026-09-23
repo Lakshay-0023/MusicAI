@@ -99,9 +99,20 @@ package index. **Install CUDA torch last:**
 .venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu121 --force-reinstall --no-deps
 ```
 
-**If a long run dies with no error and no traceback, suspect RAM, not a bug.**
-The Windows OOM killer terminates processes silently. This already happened
-once with `htdemucs_ft` on CPU.
+**If a long run dies with no error and no traceback, re-run it under
+`-X faulthandler`** and check `$LASTEXITCODE`:
+
+```powershell
+.venv\Scripts\python.exe -X faulthandler -m stemlab split "song.mp3"
+$LASTEXITCODE
+```
+
+`-1073741819` means a crash inside compiled code, and faulthandler prints the
+Python stack that ordinary error handling cannot. This is how the `shifts`
+crash was found — see §5.
+
+*(There is no "Windows OOM killer". An earlier version of this file said there
+was; that was wrong.)*
 
 ---
 
@@ -141,11 +152,10 @@ CONTEXT.md        # this file
 - Mixing/muting works and sounds correct.
 - CLI argument parsing verified.
 
-### Not yet verified
-
-- The **cache-hit path** (`split` run twice on the same file returning
-  instantly) — written but not yet confirmed by the user. This is phase 3's
-  formal "done when". **Check this first.**
+- **Cache verified end to end** (2026-09-23): `data/cache/28d2c7721b9c3fc9/`
+  holds all six stems renamed to plain names plus `meta.json`, and a second
+  `split` of the same file returns instantly. Phase 3's formal "done when" is
+  met.
 
 ### Model in use
 
@@ -153,6 +163,16 @@ CONTEXT.md        # this file
 over the 4-stem default because practising a *specific instrument* is the point
 of the app. Its guitar and especially piano separation is rougher than the core
 three; that tradeoff was made knowingly.
+
+Run with **`shifts: 1`** (`DEMUCS_PARAMS` in `separate.py`), not the library
+default of `2`. Two passes hold two full-size result buffers at once and crash
+this machine with an access violation when RAM is tight. One pass: half the
+peak memory, twice as fast, marginally less polished. **Do not raise this
+without a reason** — it is a deliberate fix, not an oversight.
+
+Only plain `onnxruntime` is installed, never `onnxruntime-gpu`. The two install
+into the same folder and overwrite each other, and Demucs runs on PyTorch and
+never uses ONNX anyway. GPU acceleration comes from `torch ... +cu121`.
 
 ---
 

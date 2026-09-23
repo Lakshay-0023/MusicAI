@@ -12,6 +12,12 @@ from . import store
 
 MODEL = "htdemucs_6s.yaml"
 
+# shifts=2 (the library default) separates the whole song twice at slightly
+# different time offsets and averages the results. Slightly cleaner, but the
+# second pass allocates another ~500MB while the first result is still held,
+# which crashes this 8GB machine. One pass: twice as fast, half the memory.
+DEMUCS_PARAMS = {"segment_size": "Default", "shifts": 1, "overlap": 0.25, "segments_enabled": True}
+
 
 def split(song_path, force=False):
     """Separate a song into stems. Returns the song's hash.
@@ -33,7 +39,7 @@ def split(song_path, force=False):
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    separator = Separator(output_dir=str(out_dir))
+    separator = Separator(output_dir=str(out_dir), demucs_params=DEMUCS_PARAMS)
     separator.load_model(model_filename=MODEL)
     written = separator.separate(str(song_path))
 
