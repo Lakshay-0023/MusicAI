@@ -58,3 +58,15 @@ def list_cached():
         if folder.is_dir() and is_cached(folder.name):
             found.append((folder.name, read_meta(folder.name)))
     return found
+
+
+def write_index():
+    """Dump the cache listing to index.json.
+
+    The browser player cannot read the filesystem, so it reads this instead to
+    populate its song dropdown.
+    """
+    index = [{"hash": song_hash, **meta} for song_hash, meta in list_cached()]
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    (CACHE_ROOT / "index.json").write_text(json.dumps(index, indent=2))
+    return index

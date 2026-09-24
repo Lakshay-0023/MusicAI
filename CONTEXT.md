@@ -36,7 +36,7 @@ zero. There is no AI in the playback path at all.
 | Runs | Once per song | Every time a slider moves |
 | Needs | A GPU | A browser |
 | Job | song → stems + analysis | play stems in sync, mix live |
-| Status | **Built (phases 0–3)** | Not started (phases 4–9) |
+| Status | **Built (phases 0–3, 5)** | **Built (phases 4, 6)**; 7–9 to go |
 
 ---
 
@@ -124,11 +124,19 @@ was; that was wrong.)*
 stemlab/
   __init__.py
   __main__.py    # CLI: split / mix / list  (argparse only, no logic)
-  store.py       # hashing, cache paths, "has this been done?"
+  store.py       # hashing, cache paths, "has this been done?", index.json
   separate.py    # song -> six stems         (slow half)
   mixer.py       # stems + gains -> one file (fast half)
 
+  server.py      # phase 5: uploads, background jobs, SSE progress, stems
+
+web/             # the browser player (phases 4-6)
+  index.html     # drop zone, sliders, transport, song dropdown, speed/pitch
+  player.js      # audio graph, sync, upload + EventSource, speed/pitch
+  vendor/SignalsmithStretch.mjs   # MIT stretcher, WASM + AudioWorklet
+
 data/cache/<hash>/   Vocals.wav Drums.wav Bass.wav Guitar.wav Piano.wav Other.wav meta.json
+data/cache/index.json   song list the browser dropdown reads (rewritten by every `split`)
 
 split_song.py     # phase 1 script, superseded, kept for reference
 explore_audio.py  # phase 2 teaching script, writes practice.wav + rebuilt.wav
@@ -142,6 +150,10 @@ CONTEXT.md        # this file
 .venv\Scripts\python.exe -m stemlab split "song.mp3"
 .venv\Scripts\python.exe -m stemlab mix "song.mp3" --vocals 0 --drums 0.1 --out practice.wav
 .venv\Scripts\python.exe -m stemlab list
+
+# the web app (phase 5) - page, uploads and stems from one server
+.venv\Scripts\python.exe -m stemlab serve
+# then http://127.0.0.1:8000
 ```
 
 ### Proven by running it
@@ -152,6 +164,14 @@ CONTEXT.md        # this file
 - Mixing/muting works and sounds correct.
 - CLI argument parsing verified.
 
+- **Phase 6 built** (2026-09-24): Signalsmith Stretch (MIT) on the master bus.
+  Verified the library serves correctly and the page loads; **the audio itself
+  is unverified** - no way to listen from a tool session. Ask him whether drums
+  still sound clean at 70%.
+- **Phase 5 verified end to end** (2026-09-23): uploaded a song over HTTP, got a
+  job id back instantly, followed the SSE stream through `separating` to `done`
+  with the hash, and confirmed stems serve as Opus (37 MB WAV -> 2.3 MB Opus).
+  Path-traversal and unknown-hash requests correctly 404.
 - **Cache verified end to end** (2026-09-23): `data/cache/28d2c7721b9c3fc9/`
   holds all six stems renamed to plain names plus `meta.json`, and a second
   `split` of the same file returns instantly. Phase 3's formal "done when" is
@@ -169,6 +189,36 @@ default of `2`. Two passes hold two full-size result buffers at once and crash
 this machine with an access violation when RAM is tight. One pass: half the
 peak memory, twice as fast, marginally less polished. **Do not raise this
 without a reason** — it is a deliberate fix, not an oversight.
+
+**Video input works** (`.mp4`, `.mov`, `.mkv`, `.webm`, `.3gp`, …). ffmpeg
+strips the audio to 44.1 kHz stereo before separation; the picture is dropped
+and the extracted audio deleted afterwards. The cache key is a hash of the
+*original* file as uploaded, not of the extracted audio. Intended use: phone
+recordings of his own band — expect rougher separation than a studio track,
+because one room mic gives the model far less to work with.
+
+**Downloading from YouTube or Spotify is out of scope** and was declined when
+asked. YouTube's terms prohibit it; Spotify audio is DRM-encrypted and there is
+no legitimate route to it. The product is a separation tool for files the user
+already has. Do not add `yt-dlp` or similar, and do not integrate the
+converter sites he mentioned.
+
+**Speed and pitch (phase 6) - the design is not the obvious one.** Signalsmith
+Stretch in *live input* mode ignores `rate` and honours only `semitones` (its
+docs say so explicitly). One stretcher must sit after the six stems are summed,
+otherwise the volume sliders would have to be baked in before stretching and
+would stop being live; six stretchers would cost 6x CPU and could drift.
+
+So: **speed comes from `playbackRate` on the six buffer sources** (resampling,
+which drags pitch with it), and **the stretcher corrects the pitch back**:
+
+```js
+stretch.schedule({ semitones: userSemitones - 12 * Math.log2(speed) });
+```
+
+Position tracking multiplies elapsed time by `speed`, and the speed slider
+re-anchors `offset`/`startedAt` before changing rate - otherwise the playhead
+corrupts. Do not "simplify" any of this without re-reading why.
 
 Only plain `onnxruntime` is installed, never `onnxruntime-gpu`. The two install
 into the same folder and overwrite each other, and Demucs runs on PyTorch and
@@ -270,7 +320,7 @@ audio pipeline simultaneously is how projects stall.
 **Done when:** one command turns a song plus levels into a practice track, and
 running it twice is fast the second time.
 
-### ▶ Phase 4 — The browser player · 1 week · **NEXT**
+### ✅ Phase 4 — The browser player
 One HTML page, one JS file. Load the stems, play them in perfect sync, one
 volume slider each. No server yet — open the file directly.
 
@@ -330,7 +380,7 @@ ships stems once.
 **Done when:** six sliders, in sync, and pulling drums to zero leaves a backing
 track you would actually play along to.
 
-### Phase 5 — A server, so the two halves meet · 1 week
+### ✅ Phase 5 — A server, so the two halves meet
 A small FastAPI service with four jobs:
 
 ```
@@ -353,7 +403,7 @@ spend a week on nothing.
 **Done when:** drop an mp3 on the page, watch a progress bar, the player
 appears by itself.
 
-### Phase 6 — Speed and pitch, independently · 1 week · hardest audio problem
+### ✅ Phase 6 — Speed and pitch, independently
 Play at 70% speed in the original key; transpose +2 semitones at full speed.
 Slowing a file normally drops its pitch (like a record). Separating the two is
 **time-stretching** — cutting audio into short overlapping grains and
@@ -384,7 +434,7 @@ dropped. A simple playback-rate change cannot do this.
 **Done when:** 70% speed at the original key, and +2 semitones at the original
 tempo, neither sounding robotic.
 
-### Phase 7 — Loops that land on the beat · 1 week · **the differentiator**
+### ▶ Phase 7 — Loops that land on the beat · 1 week · **NEXT, the differentiator**
 Waveform display, draggable loop region, bar numbers, count-in click, and a
 trainer that raises a loop from 60% to 100% over repetitions. For any of it to
 feel musical the app must know where the beats are:
@@ -472,17 +522,31 @@ Two honest paths pulling in opposite directions:
 
 ## 9. Immediate next steps
 
-1. **Confirm the phase 3 cache works** — run `split` twice on the same file;
-   the second must return instantly. This is phase 3's formal completion test
-   and is still unverified.
-2. **Commit the work so far.** The repo was `git init`'d but nothing has been
-   committed yet. `.gitignore` already excludes `.venv/`, `stems/`,
-   `data/cache/` and audio files.
-3. **Start phase 4** — the browser player. Begin with the sync trap above:
-   decode all stems into memory, start them at one shared timestamp.
-   One consideration specific to this machine: six 53 MB WAV stems is a lot to
-   decode into 8 GB of RAM, so converting stems to Opus (phase 5's job, but
-   worth pulling forward) may be necessary earlier than the plan suggests.
+**Confirm phase 6 sounds right** — play at 70% and judge whether drums stay
+snappy, and check ±2 semitones. If quality disappoints, the fallbacks are
+enabling formant compensation, or narrowing the slider range (the library
+documents 0.75x–1.5x as its comfortable range).
+
+**Then phase 7** — beat-aware looping, the differentiator. Detect beats on the
+*drum stem* (everything else is noise to the detector, and the stem already
+exists), save as JSON beside the stems, and have the browser snap loops to bar
+lines. Note that the stretcher adds tens of milliseconds of latency, so a
+moving playhead will need to compensate.
+
+Loose ends worth knowing:
+
+- `data/cache/index.json` still gets written by `split`, but the player now uses
+  `GET /tracks`. It is harmless, and useful if the CLI is used without the
+  server; drop it if it ever gets in the way.
+- Job state is in memory, so a server restart forgets in-flight jobs. Finished
+  splits survive on disk, so this only matters mid-separation.
+- Progress is reported as stages (`queued` / `separating` / `done`), not
+  percentages — the model gives no readable progress signal. Do not invent one.
+- Songs longer than ~5 minutes fail on the GPU: Demucs allocates one buffer for
+  the whole track (~2 GB for 16 minutes) and 4 GB of VRAM is not enough. A
+  16-minute phone video hit this. Workaround is trimming with ffmpeg; the real
+  fix is splitting long audio into overlapping segments and crossfading the
+  stems back together. Not built yet — he chose to move on.
 
 ---
 

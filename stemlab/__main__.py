@@ -37,6 +37,10 @@ def build_parser():
 
     commands.add_parser("list", help="show which songs have been split")
 
+    serve_cmd = commands.add_parser("serve", help="run the web app")
+    serve_cmd.add_argument("--host", default="127.0.0.1")
+    serve_cmd.add_argument("--port", type=int, default=8000)
+
     return parser
 
 
@@ -56,6 +60,10 @@ def main(argv=None):
 
         mixer.render(song_hash, gains, args.out)
         print(f"Wrote {args.out}")
+
+    elif args.command == "serve":
+        from . import server
+        server.serve(args.host, args.port)
 
     elif args.command == "list":
         cached = store.list_cached()
