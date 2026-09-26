@@ -280,6 +280,24 @@ trackSel.addEventListener("change", () => {
   loadTrack(trackSel.value).catch(fail);
 });
 
+function seekBy(seconds) {
+  if (!ctx || !duration) return;
+  const target = Math.max(0, Math.min(duration, position() + seconds));
+  if (playing) { stop(); play(target); } else { offset = target; }
+  nowEl.textContent = fmt(target);
+  seekEl.value = Math.round((target / duration) * 1000);
+}
+
+// You are holding an instrument. Reaching for the mouse breaks practice.
+document.addEventListener("keydown", (event) => {
+  // Let keys through when a control has focus, so space still works a button.
+  if (["INPUT", "SELECT", "BUTTON", "TEXTAREA"].includes(event.target.tagName)) return;
+
+  if (event.code === "Space") { event.preventDefault(); playBtn.click(); }
+  if (event.code === "ArrowLeft") { event.preventDefault(); seekBy(-5); }
+  if (event.code === "ArrowRight") { event.preventDefault(); seekBy(5); }
+});
+
 function fail(err) {
   statusEl.hidden = false;
   statusEl.className = "error";
