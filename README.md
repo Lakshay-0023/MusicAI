@@ -40,9 +40,10 @@ gap in this document, not in you.
 8. [Phase 4 — The browser player](#8-phase-4--the-browser-player)
 9. [Phase 5 — The server](#9-phase-5--the-server)
 10. [Phase 6 — Speed and pitch](#10-phase-6--speed-and-pitch-independently)
-11. [Project layout](#11-project-layout)
-12. [What comes next](#12-what-comes-next)
-13. [Glossary](#13-glossary)
+11. [Phase 7 — Seeing the song, and looping it](#11-phase-7--seeing-the-song-and-looping-it)
+12. [Project layout](#12-project-layout)
+13. [What comes next](#13-what-comes-next)
+14. [Glossary](#14-glossary)
 
 ---
 
@@ -85,7 +86,7 @@ different places.
 │  song.mp3 → 6 stem files      │         │  plays stems in sync,         │
 │  (+ tempo/key later)          │         │  mixes them live              │
 └───────────────────────────────┘         └───────────────────────────────┘
-        phases 0–3, 5 ✅                          phases 4, 6 ✅, 7–9 to go
+        phases 0–3, 5, 7 ✅                       phases 4, 6, 7 ✅, 8–9 to go
 ```
 
 **Why they are separate.** The kitchen takes ~25 seconds per song and needs a
@@ -149,6 +150,9 @@ ffmpeg -version
 
 # List what has been split
 .venv\Scripts\python.exe -m stemlab list
+
+# Find the beats in a song split before beat tracking existed
+.venv\Scripts\python.exe -m stemlab analyse "song.mp3"
 
 # The web app - page, uploads and stems, all from one server
 .venv\Scripts\python.exe -m stemlab serve
@@ -1164,7 +1168,171 @@ Without that, changing speed would corrupt the playhead.
 
 ---
 
-## 11. Project layout
+## 11. Phase 7 — Seeing the song, and looping it
+
+The phase that makes this a practice tool rather than a player with sliders.
+
+**The problem:** there is one hard passage you want to learn. Without looping
+you play it, drag the seek bar back, land somewhere slightly wrong, play it
+again, drag back again. Most of the practice time goes into dragging.
+
+**With looping:** select it once and it repeats by itself, indefinitely, while
+you play along.
+
+### The waveform
+
+The strip above the transport is the song, drawn.
+
+**The problem it solves:** the song is about 10 million numbers. The canvas is
+a few hundred pixels wide. You cannot draw 10 million things in 800 slots.
+
+**So each pixel stands for a chunk of the song:**
+
+```
+10,000,000 numbers / 800 pixels = 12,500 numbers per pixel
+```
+
+For each pixel, find the **loudest** value in its chunk and draw a line that
+tall. Loud sections become tall, quiet ones short, and the shape of the
+arrangement becomes visible at a glance.
+
+Reading all 12,500 values per pixel is unnecessary, so it steps through them,
+sampling roughly 150 per chunk. Visually identical, several times faster.
+
+This happens in the browser, from audio already decoded in memory. No server
+involvement at all.
+
+### Finding the beats
+
+A loop that restarts a fraction of a beat late is useless: you feel the
+stumble every time it wraps, and your timing follows what you hear. So the loop
+has to restart on a bar line, which means the app has to know where the beats
+are.
+
+That is analysis, so it belongs in the kitchen. `stemlab/analyse.py` runs once
+per song and writes `beats.json` next to the stems.
+
+**How beat tracking works, in outline.** A beat usually coincides with a sudden
+rise in loudness — a kick or snare. So:
+
+```
+loudness over time:   ▁▁▁█▁▁▁█▁▁▁█▁▁▁█▁▁▁█
+                         ↑   ↑   ↑   ↑   ↑
+                       the sudden rises
+```
+
+Find those rises, then find the regular spacing that best explains them. That
+spacing is the tempo, and the positions are the beats.
+
+**Analyse the drum stem, not the mix.** To a beat tracker, a loud guitar chord
+looks much like a drum hit, and a dense arrangement is mostly distraction. The
+isolated drum stem contains almost nothing but hits. The accuracy is free,
+because Phase 1 already produced that stem.
+
+On the test song this gave 83.35 bpm, with the gap between consecutive beats
+identical to the millisecond.
+
+**Extending the grid backwards.** Beats are only detected where drums actually
+play, and the test song has no drums for its first twelve seconds — so the
+entire intro had no grid, and nothing to snap a loop to. Produced music holds a
+steady tempo, so the spacing found later is projected back to the start of the
+song.
+
+**Sample rate.** Analysis loads the audio at 22.05 kHz rather than 44.1. No
+musical information near 20 kHz tells you where a snare is, and halving the
+data cut the time from 31 seconds to 10.
+
+**Bars.** `librosa` reports beats, not which beat starts a bar. The code
+assumes four beats to a bar and treats the first detected beat as a bar start.
+That is an assumption, and it will be wrong for waltzes and for songs with an
+unusual pickup. Getting it properly right needs downbeat detection, which is a
+harder problem and a different library.
+
+### Serving the beats
+
+```
+GET /tracks/{hash}/beats  ->  { "tempo": 83.35, "beatsPerBar": 4, "beats": [...] }
+```
+
+Two details worth noting.
+
+**It is a plain `def`, not `async def`.** FastAPI runs synchronous endpoints in
+a worker thread. Analysis takes several seconds, and on the main event loop
+that would freeze every other request for its duration.
+
+**It analyses on demand if the file is missing.** Songs split before beat
+tracking existed are handled the first time the player asks, then cached like
+everything else. The browser does not wait for it either — bar lines simply
+appear when the data arrives.
+
+### Snapping
+
+Wherever you release the drag, the start and end jump to the nearest bar line:
+
+```
+released at:  bar 17.3          bar 20.8
+snapped to:   bar 17            bar 21
+```
+
+You never have to be precise, and the result is always musical.
+
+### Why the audio thread does the looping
+
+The obvious implementation is to watch the clock in JavaScript and jump back
+when playback passes the end. That is the wrong approach: the main thread
+pauses regularly for rendering and memory work, so the jump lands late by
+however long the page happened to be busy. Tens of milliseconds, audible, and
+different every time round.
+
+Instead each source is told to loop itself:
+
+```js
+src.loop = true;
+src.loopStart = loop.start;
+src.loopEnd = loop.end;
+```
+
+The audio engine handles the wrap in its own real-time thread, sample-accurate,
+regardless of what the page is doing. JavaScript sets the points and steps
+away.
+
+### Position while looping
+
+Elapsed time keeps growing after the loop end, so the playhead has to be folded
+back into the loop:
+
+```js
+let pos = offset + (clock now - startedAt) * speed;
+if (pos > loop.end) pos = loop.start + ((pos - loop.start) % (loop.end - loop.start));
+```
+
+That modulo is the whole trick: divide by the loop length and keep the
+remainder.
+
+### Mute, solo, and why the slider does not move
+
+Watching what practice actually involves: muting an instrument to play its part
+is constant, soloing one to learn it is frequent, and setting something to 37%
+almost never happens. A slider makes the rare action easy and the constant one
+fiddly — solo would mean dragging five sliders to zero and back.
+
+So each stem has **M** and **S** buttons, as a mixing desk has had for fifty
+years, for the same reason: mute and solo are instant, reversible, and they
+leave the level setting intact.
+
+**The row dims instead of the slider moving.** Moving the slider to zero would
+destroy the level that mute exists to remember — unmute would put you back at
+100% rather than your 40%. Dimming the row shows what is silent while the
+setting survives. Soloing dims the other five at once, so one glance tells you
+what you are hearing.
+
+**Keys 1-6** mute stems, **space** plays and pauses, **arrows** skip five
+seconds, **Esc** clears the loop. You are holding an instrument; reaching for
+the mouse breaks practice in a way a keystroke does not.
+
+---
+
+## 12. Project layout
 
 ```
 MusicTeacher/
@@ -1173,7 +1341,8 @@ MusicTeacher/
 │   ├── store.py             # hashing, cache paths, index.json
 │   ├── separate.py          # song → stems + Opus copies (slow half)
 │   ├── mixer.py             # stems → one file          (fast half)
-│   └── server.py            # uploads, jobs, progress, stems
+│   ├── server.py            # uploads, jobs, progress, stems, beats
+│   └── analyse.py           # tempo and beat times, from the drum stem
 │
 ├── web/                     # the instrument (phase 4)
 │   ├── index.html           # sliders, transport, song dropdown
@@ -1185,6 +1354,7 @@ MusicTeacher/
 │   ├── <hash>/              # one folder per song
 │   │   ├── Vocals.wav …      # lossless, kept for re-rendering
 │   │   ├── Vocals.opus …     # compressed, what the server sends
+│   │   ├── beats.json       # tempo + beat times for bar lines
 │   │   └── meta.json        # written last = split completed
 │   ├── index.json           # song list (superseded by GET /tracks)
 │   └── ../uploads/          # songs uploaded through the page
@@ -1197,7 +1367,7 @@ MusicTeacher/
 
 ---
 
-## 12. What comes next
+## 13. What comes next
 
 | Phase | What | Status |
 | --- | --- | --- |
@@ -1208,15 +1378,9 @@ MusicTeacher/
 | 4 | The browser player | ✅ |
 | 5 | A server, so the two halves meet | ✅ |
 | 6 | Speed and pitch, independently | ✅ |
-| 7 | Loops that land on the beat | Next |
+| 7 | Loops that land on the beat | ✅ |
 | 8 | More instruments than six | Partly done |
 | 9 | Something you can hand to someone | |
-
-**Phase 7 — beat-aware looping.** The differentiator. A loop that starts a
-fraction of a beat late is useless for practice — you feel the stumble every
-time it wraps. Requires detecting where the beats are, which is more accurate on
-the drum stem than on the full mix, because everything else is noise to the
-detector.
 
 **Phase 8 — more instruments.** Already partly done by using the six-stem model.
 Going further means chaining models, and the largest open model needs far more
@@ -1228,7 +1392,7 @@ you pay for GPU time and take on responsibility for other people's music).
 
 ---
 
-## 13. Glossary
+## 14. Glossary
 
 | Term | Meaning |
 | --- | --- |

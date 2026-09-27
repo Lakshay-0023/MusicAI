@@ -9,7 +9,7 @@ from pathlib import Path
 
 from audio_separator.separator import Separator
 
-from . import store
+from . import analyse, store
 
 MODEL = "htdemucs_6s.yaml"
 
@@ -104,6 +104,15 @@ def split(song_path, force=False):
                 break
 
     to_opus(out_dir)
+
+    # Beat tracking can fail on material it cannot make sense of, and losing a
+    # finished 25-second separation over that would be absurd. The player
+    # simply goes without bar lines.
+    try:
+        beats = analyse.analyse(song_hash)
+        print(f"  tempo : {beats['tempo']} bpm, {len(beats['beats'])} beats")
+    except Exception as err:
+        print(f"  beat detection failed ({err}) - continuing without it")
 
     # Written last on purpose - see store.is_cached().
     store.write_meta(song_hash, {

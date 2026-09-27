@@ -25,7 +25,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import separate, store
+from . import analyse, separate, store
 
 UPLOADS = Path("data/uploads")
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -104,6 +104,16 @@ async def track(song_hash: str):
         **meta,
         "stems": {n: f"/stems/{song_hash}/{n}" for n in store.STEM_NAMES},
     }
+
+
+# A plain "def", not "async def": FastAPI then runs it in a worker thread, so
+# the few seconds of analysis cannot block every other request.
+@app.get("/tracks/{song_hash}/beats")
+def beats(song_hash: str):
+    load_meta(song_hash)
+    # Songs split before beat tracking existed get analysed on first request,
+    # then cached like everything else.
+    return analyse.load(song_hash) or analyse.analyse(song_hash)
 
 
 @app.get("/stems/{song_hash}/{stem}")

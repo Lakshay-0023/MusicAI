@@ -93,6 +93,34 @@ input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
 .master{margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--line)}
 .master .stem{border-bottom:0}
 .master #resetSpeedPitch{margin-top:.4rem; font-size:.8rem}
+#loopBar{
+  display:flex; align-items:center; gap:.8rem;
+  font-size:.85rem; color:var(--ink-2); margin:-.4rem 0 1rem;
+}
+#loopBar strong{color:var(--ink)}
+
+#wave{
+  display:block; width:100%; height:88px;
+  background:var(--panel); border:1px solid var(--line);
+  border-radius:8px; margin-bottom:1rem; cursor:pointer;
+}
+
+.stem.track{grid-template-columns:5.5rem auto 1fr 3rem}
+.stem.silent label,
+.stem.silent input[type=range],
+.stem.silent .val{opacity:.28}
+.stem-btns{display:flex; gap:.3rem}
+.stem-btns button{
+  width:1.7rem; height:1.7rem; padding:0; border-radius:5px;
+  background:transparent; color:var(--ink-2);
+  border:1px solid var(--line);
+  font-size:.7rem; font-weight:700; line-height:1; font-family:inherit;
+  cursor:pointer;
+}
+.stem-btns button:hover{color:var(--ink)}
+.stem-btns button.mute.on{background:var(--vocals); border-color:var(--vocals); color:#fff}
+.stem-btns button.solo.on{background:var(--guitar); border-color:var(--guitar); color:#10231c}
+
 .stepper{display:flex; align-items:center; gap:.45rem}
 .stepper button{
   width:2rem; height:2rem; padding:0; border-radius:6px;
@@ -129,6 +157,13 @@ input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
 
   <div id="status">Loading…</div>
 
+  <canvas id="wave" hidden></canvas>
+
+  <div id="loopBar" hidden>
+    <span id="loopText"></span>
+    <button type="button" id="loopClear" class="link">clear</button>
+  </div>
+
   <div class="transport" hidden>
     <button id="playBtn">Play</button>
     <input type="range" id="seek" min="0" max="1000" value="0">
@@ -154,14 +189,16 @@ input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
     </div>
     <div class="stem">
       <label for="masterVol">Master</label>
-      <input type="range" id="masterVol" min="0" max="100" value="80">
-      <span class="val" id="masterVal">80%</span>
+      <input type="range" id="masterVol" min="0" max="100" value="100">
+      <span class="val" id="masterVal">100%</span>
     </div>
     <button type="button" id="resetSpeedPitch" class="link">reset speed &amp; pitch</button>
   </div>
 
   <p class="hint">
-    <strong>Space</strong> play/pause &nbsp;·&nbsp; <strong>← →</strong> skip 5 seconds<br>
+    <strong>Space</strong> play/pause &nbsp;·&nbsp; <strong>← →</strong> skip 5 seconds
+    &nbsp;·&nbsp; <strong>Esc</strong> clear loop<br>
+    Drag across the waveform to loop a section — it snaps to bar lines.<br>
     0% is true silence for that instrument, not just quiet.<br>
     Sliders stop at 100% — that is exactly as loud as the instrument was on the
     original record. To make one instrument stand out, pull the others down.

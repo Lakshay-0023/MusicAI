@@ -36,7 +36,7 @@ zero. There is no AI in the playback path at all.
 | Runs | Once per song | Every time a slider moves |
 | Needs | A GPU | A browser |
 | Job | song → stems + analysis | play stems in sync, mix live |
-| Status | **Built (phases 0–3, 5)** | **Built (phases 4, 6)**; 7–9 to go |
+| Status | **Built (phases 0–3, 5, 7)** | **Built (phases 4, 6, 7)**; 8–9 to go |
 
 ---
 
@@ -129,10 +129,11 @@ stemlab/
   mixer.py       # stems + gains -> one file (fast half)
 
   server.py      # phase 5: uploads, background jobs, SSE progress, stems
+  analyse.py     # phase 7: tempo + beat times, from the DRUM stem
 
 web/             # the browser player (phases 4-6)
   index.html     # drop zone, sliders, transport, song dropdown, speed/pitch
-  player.js      # audio graph, sync, upload + EventSource, speed/pitch
+  player.js      # audio graph, sync, upload, speed/pitch, waveform, looping
   vendor/SignalsmithStretch.mjs   # MIT stretcher, WASM + AudioWorklet
 
 data/cache/<hash>/   Vocals.wav Drums.wav Bass.wav Guitar.wav Piano.wav Other.wav meta.json
@@ -164,6 +165,10 @@ CONTEXT.md        # this file
 - Mixing/muting works and sounds correct.
 - CLI argument parsing verified.
 
+- **Phase 7 built** (2026-09-27): waveform, beat detection, bar lines,
+  drag-to-loop with snapping, mute/solo, keyboard shortcuts. He confirmed bar
+  lines land correctly and looping works. Beat detection measured 83.35 bpm on
+  the test song with millisecond-consistent spacing.
 - **Phase 6 built** (2026-09-24): Signalsmith Stretch (MIT) on the master bus.
   Verified the library serves correctly and the page loads; **the audio itself
   is unverified** - no way to listen from a tool session. Ask him whether drums
@@ -202,6 +207,18 @@ asked. YouTube's terms prohibit it; Spotify audio is DRM-encrypted and there is
 no legitimate route to it. The product is a separation tool for files the user
 already has. Do not add `yt-dlp` or similar, and do not integrate the
 converter sites he mentioned.
+
+**Looping is done by the audio thread, not JavaScript** (`src.loop = true` with
+`loopStart`/`loopEnd`). Watching the clock in JS and jumping manually makes the
+wrap land late whenever the page is busy - exactly the stumble that makes
+looping useless for practice. Don't "simplify" it into a timer.
+
+**Beat detection runs on the DRUM stem**, at 22.05 kHz, and the grid is
+extended backwards to the song start because drums often enter late. Bars
+assume 4/4 - real downbeat detection would need madmom.
+
+**Mute/solo dim the row rather than moving the slider** - the level has to
+survive unmuting.
 
 **Speed and pitch (phase 6) - the design is not the obvious one.** Signalsmith
 Stretch in *live input* mode ignores `rate` and honours only `semitones` (its
@@ -434,7 +451,7 @@ dropped. A simple playback-rate change cannot do this.
 **Done when:** 70% speed at the original key, and +2 semitones at the original
 tempo, neither sounding robotic.
 
-### ▶ Phase 7 — Loops that land on the beat · 1 week · **NEXT, the differentiator**
+### ✅ Phase 7 — Loops that land on the beat (core done)
 Waveform display, draggable loop region, bar numbers, count-in click, and a
 trainer that raises a loop from 60% to 100% over repetitions. For any of it to
 feel musical the app must know where the beats are:
@@ -460,7 +477,7 @@ Existing apps mostly do separation well and this part thinly.
 **Done when:** you can loop bars 17–20 at 70% speed and it lands on the
 downbeat every time.
 
-### Phase 8 — More instruments than four · 3–4 days · *partly done already*
+### ▶ Phase 8 — More instruments than four · **NEXT** · *partly done already*
 Chain models rather than replacing them:
 
 ```
@@ -522,7 +539,17 @@ Two honest paths pulling in opposite directions:
 
 ## 9. Immediate next steps
 
-**Confirm phase 6 sounds right** — play at 70% and judge whether drums stay
+**Phase 7 still has two optional pieces from the plan:** a count-in click
+before a loop starts, and a trainer that raises a loop from ~60% toward 100%
+over repetitions. Neither is built; both are small and only worth doing if real
+practice shows they are wanted.
+
+**Then phase 8/9.** Phase 8 is largely satisfied already by using the 6-stem
+model; the 53-stem model needs ~16 GB VRAM and is out of reach on this machine.
+Phase 9 is the ship-it decision: local desktop app (Tauri) versus cloud
+service, with the legal notes in §6.
+
+**Older note - confirm phase 6 sounds right** — play at 70% and judge whether drums stay
 snappy, and check ±2 semitones. If quality disappoints, the fallbacks are
 enabling formant compensation, or narrowing the slider range (the library
 documents 0.75x–1.5x as its comfortable range).

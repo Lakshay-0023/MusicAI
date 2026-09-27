@@ -12,7 +12,7 @@ Phase 5 will call separate.split() and mixer.render() directly, not this.
 import argparse
 import sys
 
-from . import mixer, separate, store
+from . import analyse, mixer, separate, store
 
 
 def build_parser():
@@ -37,6 +37,9 @@ def build_parser():
 
     commands.add_parser("list", help="show which songs have been split")
 
+    analyse_cmd = commands.add_parser("analyse", help="find the beats in a song already split")
+    analyse_cmd.add_argument("song", help="path to the audio file")
+
     serve_cmd = commands.add_parser("serve", help="run the web app")
     serve_cmd.add_argument("--host", default="127.0.0.1")
     serve_cmd.add_argument("--port", type=int, default=8000)
@@ -60,6 +63,13 @@ def main(argv=None):
 
         mixer.render(song_hash, gains, args.out)
         print(f"Wrote {args.out}")
+
+    elif args.command == "analyse":
+        song_hash = store.hash_file(args.song)
+        if not store.is_cached(song_hash):
+            sys.exit(f"Not split yet. Run:  python -m stemlab split \"{args.song}\"")
+        found = analyse.analyse(song_hash)
+        print(f"{found['tempo']} bpm, {len(found['beats'])} beats -> beats.json")
 
     elif args.command == "serve":
         from . import server
