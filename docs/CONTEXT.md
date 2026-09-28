@@ -17,7 +17,7 @@ plan"). The full plan is reproduced below, so fetching it is optional.
 
 ## 1. What is being built
 
-A **stem separation practice app**. Feed in a song, an AI model splits it into
+**Woodshed** - a stem separation practice app (renamed from stemlab on 2026-09-28). Feed in a song, an AI model splits it into
 per-instrument tracks ("stems"), and then you practise inside the song — mute
 the guitar and play that part yourself, drop the drums to 10% and keep time,
 solo the vocal to learn a melody, loop four bars at 70% speed.
@@ -73,6 +73,12 @@ reserved for integrated AMD graphics) · **NVIDIA RTX 3050 Laptop, 4 GB VRAM**.
 
 **Project folder:** `C:\Users\laksh\OneDrive\Desktop\MusicTeacher`
 
+**Layout (restructured 2026-09-28):** `backend/woodshed/` installed as an
+editable package, so the `woodshed` command works from anywhere; `frontend/`
+holds the browser player; `docs/` holds this file and README.md; `data/` is
+never committed. The old `stemlab/` package, `split_song.py` and
+`explore_audio.py` were deleted - they are in git history if ever needed.
+
 **Always invoke Python like this:**
 
 ```powershell
@@ -103,7 +109,7 @@ package index. **Install CUDA torch last:**
 `-X faulthandler`** and check `$LASTEXITCODE`:
 
 ```powershell
-.venv\Scripts\python.exe -X faulthandler -m stemlab split "song.mp3"
+.venv\Scripts\python.exe -X faulthandler -m woodshed split "song.mp3"
 $LASTEXITCODE
 ```
 
@@ -121,7 +127,7 @@ was; that was wrong.)*
 ### Built
 
 ```
-stemlab/
+woodshed/
   __init__.py
   __main__.py    # CLI: split / mix / list  (argparse only, no logic)
   store.py       # hashing, cache paths, "has this been done?", index.json
@@ -148,12 +154,12 @@ CONTEXT.md        # this file
 ### Commands
 
 ```powershell
-.venv\Scripts\python.exe -m stemlab split "song.mp3"
-.venv\Scripts\python.exe -m stemlab mix "song.mp3" --vocals 0 --drums 0.1 --out practice.wav
-.venv\Scripts\python.exe -m stemlab list
+woodshed split "song.mp3"
+woodshed mix "song.mp3" --vocals 0 --drums 0.1 --out practice.wav
+woodshed list
 
 # the web app (phase 5) - page, uploads and stems from one server
-.venv\Scripts\python.exe -m stemlab serve
+woodshed serve
 # then http://127.0.0.1:8000
 ```
 

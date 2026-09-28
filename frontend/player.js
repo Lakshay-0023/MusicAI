@@ -588,7 +588,7 @@ async function refreshTracks(selectHash) {
   trackSel.innerHTML = "";
   for (const t of tracks) {
     const opt = document.createElement("option");
-    opt.value = t.hash;
+    opt.value = t.id;
     opt.textContent = t.source.replace(/\.[^.]+$/, "");
     trackSel.appendChild(opt);
   }
@@ -624,14 +624,16 @@ function follow(jobId) {
   events.onmessage = async (msg) => {
     const job = JSON.parse(msg.data);
 
-    if (job.status === "queued")      jobStatus.textContent = "queued…";
-    if (job.status === "separating")  jobStatus.textContent = "separating — about 30 seconds…";
+    // The server reports which step it is on rather than a made-up
+    // percentage: the model gives no readable progress signal, and invented
+    // precision is worse than an honest label.
+    if (!job.finished) jobStatus.textContent = `${job.step || job.status}…`;
 
     if (job.status === "done") {
       events.close();
       jobStatus.textContent = "ready";
-      await refreshTracks(job.hash);
-      await loadTrack(job.hash).catch(fail);
+      await refreshTracks(job.track_id);
+      await loadTrack(job.track_id).catch(fail);
       setTimeout(() => { jobEl.hidden = true; }, 2500);
     }
 

@@ -1,0 +1,33 @@
+[project]
+name = "woodshed"
+version = "0.1.0"
+description = "Take a song apart, then practise inside it."
+requires-python = ">=3.11"
+
+# NOTE: torch is deliberately absent. It must be installed separately from
+# PyTorch's own index so the CUDA build is used -- listing it here would let
+# pip replace that build with the CPU-only wheel, silently losing the GPU.
+#
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121 \
+#       --force-reinstall --no-deps
+dependencies = [
+    "audio-separator",
+    "onnxruntime",          # plain build only; never onnxruntime-gpu
+    "soundfile",
+    "numpy",
+    "librosa",
+    "audioread",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+]
+
+[project.scripts]
+woodshed = "woodshed.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["woodshed"]
