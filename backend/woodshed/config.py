@@ -21,7 +21,6 @@ VIDEO_SUFFIXES = frozenset(
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = REPO_ROOT / "data"
-    web_dir: Path = REPO_ROOT / "frontend"
 
     separation_model: str = "htdemucs_6s.yaml"
 
@@ -41,6 +40,17 @@ class Settings:
     # roughly halves the time it takes.
     analysis_sample_rate: int = 22050
     beats_per_bar: int = 4
+
+    @property
+    def web_dir(self) -> Path:
+        """The built front end, when there is one.
+
+        In development the React app is served by Vite on its own port and
+        talks to this server through a proxy, so nothing is served from here.
+        After `npm run build` the finished files appear in frontend/dist and
+        this server can serve them itself.
+        """
+        return REPO_ROOT / "frontend" / "dist"
 
     @property
     def cache_dir(self) -> Path:

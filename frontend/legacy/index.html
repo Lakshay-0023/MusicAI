@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>stemlab player</title>
+<style>
+:root{
+  --bg:#15181a; --panel:#1e2326; --ink:#e9e7e0; --ink-2:#9aa19d;
+  --line:#343b3f; --accent:#7c82ff;
+  --vocals:#e9708f; --drums:#e5a54a; --bass:#6c9bf0;
+  --guitar:#4fc49b; --piano:#a68bf0; --other:#9aa19d;
+}
+*{box-sizing:border-box}
+/* A rule that sets display beats the browser's built-in [hidden] rule, so
+   hiding silently stops working on any element with display:flex. */
+[hidden]{display:none !important}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding:2rem 1rem 4rem;
+}
+.wrap{max-width:46rem;margin:0 auto}
+h1{font-size:1.4rem;margin:0 0 .2rem}
+.sub{color:var(--ink-2);font-size:.85rem;margin:0 0 2rem}
+
+#drop{
+  border:1.5px dashed var(--line); border-radius:8px;
+  padding:1.6rem 1rem; text-align:center; margin-bottom:1rem;
+  display:flex; flex-direction:column; gap:.35rem;
+  color:var(--ink-2); font-size:.85rem; transition:border-color .15s, background .15s;
+}
+#drop strong{color:var(--ink); font-size:.95rem}
+#drop.over{border-color:var(--accent); background:rgba(124,130,255,.07)}
+.link{
+  background:none; border:0; padding:0; font:inherit;
+  color:var(--accent); text-decoration:underline; cursor:pointer;
+}
+#job{
+  display:flex; justify-content:space-between; gap:1rem;
+  background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  padding:.8rem 1rem; margin-bottom:1rem; font-size:.85rem;
+}
+#jobStatus{color:var(--ink-2)}
+#job.error #jobStatus{color:var(--vocals)}
+
+.picker{display:flex; align-items:center; gap:.8rem; margin-bottom:1rem}
+.picker label{font-size:.85rem; color:var(--ink-2)}
+select{
+  flex:1; background:var(--panel); color:var(--ink);
+  border:1px solid var(--line); border-radius:6px;
+  padding:.55rem .7rem; font-size:.9rem; font-family:inherit; cursor:pointer;
+}
+
+#status{
+  background:var(--panel); border:1px solid var(--line); border-radius:8px;
+  padding:1rem; text-align:center; color:var(--ink-2); margin-bottom:1.5rem;
+}
+#status.error{color:var(--vocals)}
+
+.transport{
+  display:flex; align-items:center; gap:1rem;
+  background:var(--panel); border:1px solid var(--line);
+  border-radius:8px; padding:1rem; margin-bottom:1.5rem;
+}
+button{
+  background:var(--accent); color:#fff; border:0; border-radius:6px;
+  padding:.6rem 1.4rem; font-size:.95rem; font-weight:600; cursor:pointer;
+  font-family:inherit;
+}
+button:disabled{opacity:.4; cursor:default}
+#seek{flex:1}
+.time{
+  font-variant-numeric:tabular-nums; font-size:.85rem;
+  color:var(--ink-2); white-space:nowrap;
+}
+
+.stem{
+  display:grid; grid-template-columns:5.5rem 1fr 3rem;
+  align-items:center; gap:1rem;
+  padding:.7rem 0; border-bottom:1px solid var(--line);
+}
+.stem label{font-size:.9rem; font-weight:600}
+.stem .val{
+  font-variant-numeric:tabular-nums; font-size:.85rem;
+  color:var(--ink-2); text-align:right;
+}
+input[type=range]{width:100%; accent-color:var(--accent); cursor:pointer}
+.stem[data-stem=Vocals] input{accent-color:var(--vocals)}
+.stem[data-stem=Drums]  input{accent-color:var(--drums)}
+.stem[data-stem=Bass]   input{accent-color:var(--bass)}
+.stem[data-stem=Guitar] input{accent-color:var(--guitar)}
+.stem[data-stem=Piano]  input{accent-color:var(--piano)}
+.stem[data-stem=Other]  input{accent-color:var(--other)}
+
+.master{margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--line)}
+.master .stem{border-bottom:0}
+.master #resetSpeedPitch{margin-top:.4rem; font-size:.8rem}
+#loopBar{
+  display:flex; align-items:center; gap:.8rem;
+  font-size:.85rem; color:var(--ink-2); margin:-.4rem 0 1rem;
+}
+#loopBar strong{color:var(--ink)}
+
+#wave{
+  display:block; width:100%; height:88px;
+  background:var(--panel); border:1px solid var(--line);
+  border-radius:8px; margin-bottom:1rem; cursor:pointer;
+}
+
+.stem.track{grid-template-columns:5.5rem auto 1fr 3rem}
+.stem.silent label,
+.stem.silent input[type=range],
+.stem.silent .val{opacity:.28}
+.stem-btns{display:flex; gap:.3rem}
+.stem-btns button{
+  width:1.7rem; height:1.7rem; padding:0; border-radius:5px;
+  background:transparent; color:var(--ink-2);
+  border:1px solid var(--line);
+  font-size:.7rem; font-weight:700; line-height:1; font-family:inherit;
+  cursor:pointer;
+}
+.stem-btns button:hover{color:var(--ink)}
+.stem-btns button.mute.on{background:var(--vocals); border-color:var(--vocals); color:#fff}
+.stem-btns button.solo.on{background:var(--guitar); border-color:var(--guitar); color:#10231c}
+
+.stepper{display:flex; align-items:center; gap:.45rem}
+.stepper button{
+  width:2rem; height:2rem; padding:0; border-radius:6px;
+  background:var(--panel); color:var(--ink);
+  border:1px solid var(--line); font-size:1rem; line-height:1;
+}
+.stepper button:hover:not(:disabled){border-color:var(--accent); color:var(--accent)}
+.stepper .unit{font-size:.78rem; color:var(--ink-2); margin-left:.25rem}
+.stem input[type=range]#speed, .stem input[type=range]#pitch{accent-color:var(--ink-2)}
+.hint{color:var(--ink-2); font-size:.8rem; margin-top:2rem; line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>stemlab</h1>
+  <p class="sub">Six stems, one slider each. Drag while it plays.</p>
+
+  <div id="drop">
+    <strong>Drop a song here</strong>
+    <span>or <button type="button" id="browse" class="link">choose a file</button> — audio or video</span>
+    <input type="file" id="file" accept="audio/*,video/*" hidden>
+  </div>
+
+  <div id="job" hidden>
+    <span id="jobName"></span>
+    <span id="jobStatus"></span>
+  </div>
+
+  <div class="picker" hidden>
+    <label for="track">Song</label>
+    <select id="track"></select>
+  </div>
+
+  <div id="status">Loading…</div>
+
+  <canvas id="wave" hidden></canvas>
+
+  <div id="loopBar" hidden>
+    <span id="loopText"></span>
+    <button type="button" id="loopClear" class="link">clear</button>
+  </div>
+
+  <div class="transport" hidden>
+    <button id="playBtn">Play</button>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <span class="time"><span id="now">0:00</span> / <span id="total">0:00</span></span>
+  </div>
+
+  <div id="mixer" hidden></div>
+
+  <div class="master" hidden>
+    <div class="stem">
+      <label for="speed">Speed</label>
+      <input type="range" id="speed" min="50" max="150" step="1" value="100">
+      <span class="val" id="speedVal">100%</span>
+    </div>
+    <div class="stem">
+      <label>Pitch</label>
+      <div class="stepper">
+        <button type="button" id="pitchDown" aria-label="down one semitone">−</button>
+        <button type="button" id="pitchUp" aria-label="up one semitone">+</button>
+        <span class="unit">semitones</span>
+      </div>
+      <span class="val" id="pitchVal">0</span>
+    </div>
+    <div class="stem">
+      <label for="masterVol">Master</label>
+      <input type="range" id="masterVol" min="0" max="100" value="100">
+      <span class="val" id="masterVal">100%</span>
+    </div>
+    <button type="button" id="resetSpeedPitch" class="link">reset speed &amp; pitch</button>
+  </div>
+
+  <p class="hint">
+    <strong>Space</strong> play/pause &nbsp;·&nbsp; <strong>← →</strong> skip 5 seconds
+    &nbsp;·&nbsp; <strong>Esc</strong> clear loop<br>
+    Drag across the waveform to loop a section — it snaps to bar lines.<br>
+    0% is true silence for that instrument, not just quiet.<br>
+    Sliders stop at 100% — that is exactly as loud as the instrument was on the
+    original record. To make one instrument stand out, pull the others down.
+  </p>
+
+</div>
+<script type="module" src="player.js"></script>
+</body>
+</html>
