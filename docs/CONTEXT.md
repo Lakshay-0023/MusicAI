@@ -127,28 +127,42 @@ was; that was wrong.)*
 ### Built
 
 ```
-woodshed/
-  __init__.py
-  __main__.py    # CLI: split / mix / list  (argparse only, no logic)
-  store.py       # hashing, cache paths, "has this been done?", index.json
-  separate.py    # song -> six stems         (slow half)
-  mixer.py       # stems + gains -> one file (fast half)
+backend/                      installed with `pip install -e backend`
+  pyproject.toml              deps + the `woodshed` console command
+  woodshed/
+    config.py                 every tunable value
+    tracks.py                 what a track is, how one is identified
+    cli.py                    split / mix / analyse / list / serve
+    api/
+      app.py                  assembles the app, mounts routers
+      deps.py                 shared validation
+      routes/                 tracks · stems · analysis · jobs
+    audio/
+      separation.py           song -> six stems
+      encoding.py             ffmpeg: Opus copies, audio out of video
+      mixing.py               stems + levels -> one file
+      analysis/beats.py       tempo + beat times, from the DRUM stem
+    jobs/registry.py          tickets for work that outlives a request
+    storage/{base,local}.py   where files live, behind one interface
 
-  server.py      # phase 5: uploads, background jobs, SSE progress, stems
-  analyse.py     # phase 7: tempo + beat times, from the DRUM stem
+frontend/                     React + Vite + TypeScript
+  src/
+    audio/AudioEngine.ts      ALL the sound. ~330 lines, zero React
+    audio/types.ts            StemName, Loop, PlayerState
+    api/{client,types}.ts     every call the browser makes
+    hooks/usePlayer.ts        one engine, its state mirrored into React
+    hooks/useKeyboard.ts      space, arrows, 1-6, esc
+    components/               Waveform · Transport · Mixer · PracticePanel · Dropzone
+    App.tsx                   assembles it
+  public/vendor/SignalsmithStretch.mjs    MIT stretcher, WASM + AudioWorklet
+  legacy/                     the old vanilla JS player, kept for comparison
+  dist/                       `npm run build` output; the backend serves this
 
-web/             # the browser player (phases 4-6)
-  index.html     # drop zone, sliders, transport, song dropdown, speed/pitch
-  player.js      # audio graph, sync, upload, speed/pitch, waveform, looping
-  vendor/SignalsmithStretch.mjs   # MIT stretcher, WASM + AudioWorklet
-
-data/cache/<hash>/   Vocals.wav Drums.wav Bass.wav Guitar.wav Piano.wav Other.wav meta.json
-data/cache/index.json   song list the browser dropdown reads (rewritten by every `split`)
-
-split_song.py     # phase 1 script, superseded, kept for reference
-explore_audio.py  # phase 2 teaching script, writes practice.wav + rebuilt.wav
-README.md         # full project + concept reference
-CONTEXT.md        # this file
+docs/README.md                how it all works, phase by phase
+docs/CONTEXT.md               this file
+data/cache/<id>/              Vocals.wav + .opus (x6), beats.json, meta.json
+data/uploads/                 songs as uploaded
+songs/                        his own source files
 ```
 
 ### Commands
@@ -156,12 +170,24 @@ CONTEXT.md        # this file
 ```powershell
 woodshed split "song.mp3"
 woodshed mix "song.mp3" --vocals 0 --drums 0.1 --out practice.wav
+woodshed analyse "song.mp3"
 woodshed list
-
-# the web app (phase 5) - page, uploads and stems from one server
-woodshed serve
-# then http://127.0.0.1:8000
 ```
+
+**Running the app in development needs two servers:**
+
+```powershell
+woodshed serve              # the API on :8000
+
+cd frontend && npm run dev  # the React app on :5173  <- work here
+```
+
+Vite proxies `/tracks`, `/stems` and `/jobs` through to :8000, so the browser
+sees one origin and the code uses plain paths that work unchanged in
+production. Note Vite binds to IPv6, so use `localhost:5173`, not `127.0.0.1`.
+
+For production: `npm run build` writes `frontend/dist`, and `woodshed serve`
+serves it on its own.
 
 ### Proven by running it
 
@@ -171,6 +197,11 @@ woodshed serve
 - Mixing/muting works and sounds correct.
 - CLI argument parsing verified.
 
+- **React front end built** (2026-09-29): TypeScript compiles clean, the
+  production build succeeds (~237 KB, 74 KB gzipped), the dev server serves the
+  page, all three API routes proxy correctly and the stretcher loads.
+  **Nothing audible or visual has been verified** - playback, sync, sliders,
+  waveform drawing and drag-to-loop are all still to be checked by ear and eye.
 - **Phase 7 built** (2026-09-27): waveform, beat detection, bar lines,
   drag-to-loop with snapping, mute/solo, keyboard shortcuts. He confirmed bar
   lines land correctly and looping works. Beat detection measured 83.35 bpm on
@@ -213,6 +244,22 @@ asked. YouTube's terms prohibit it; Spotify audio is DRM-encrypted and there is
 no legitimate route to it. The product is a separation tool for files the user
 already has. Do not add `yt-dlp` or similar, and do not integrate the
 converter sites he mentioned.
+
+**React never touches the audio.** `AudioEngine.ts` is a plain TypeScript
+class that owns the graph, the six sources, the stretcher and the loop; it
+imports nothing from React. React owns the screen and calls methods on it,
+through `usePlayer`. Two consequences that must not be undone:
+
+- *Position never goes through React.* The waveform and clock run their own
+  `requestAnimationFrame` and read `engine.position` directly. Only discrete
+  changes - playing, levels, loop points - flow through React state. Pushing a
+  playhead through state sixty times a second would be waste.
+- *The engine is held in a ref and created once.* If React owned the graph it
+  would be rebuilt on render and the sample-accurate sync would collapse.
+
+**The stretcher is loaded at runtime from `public/vendor/`,** not bundled - the
+import path is held in a variable so TypeScript treats it as a runtime value
+rather than a file to resolve at build time.
 
 **Looping is done by the audio thread, not JavaScript** (`src.loop = true` with
 `loopStart`/`loopEnd`). Watching the clock in JS and jumping manually makes the
@@ -544,6 +591,21 @@ Two honest paths pulling in opposite directions:
 ---
 
 ## 9. Immediate next steps
+
+**Check the React app by ear and eye** - that is the only thing standing
+between it and replacing the old player. Same tests as before: six stems in
+sync, sliders live, drag-to-loop wrapping cleanly, speed and pitch independent.
+
+**Then delete `frontend/legacy/`** once it is clearly no better than the new
+one. It is in git regardless.
+
+**Still open from the agreed stack** (recommended but not built): Postgres +
+SQLAlchemy + Alembic, Redis + RQ instead of in-process background tasks,
+Cloudflare R2 for files, Modal or RunPod for serverless GPU, Clerk or Supabase
+for auth. Order: database and auth first, then jobs and storage, then features.
+
+**Older notes below.**
+
 
 **Phase 7 still has two optional pieces from the plan:** a count-in click
 before a loop starts, and a trainer that raises a loop from ~60% toward 100%

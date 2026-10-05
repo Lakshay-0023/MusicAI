@@ -1340,13 +1340,61 @@ the mouse breaks practice in a way a keystroke does not.
 
 ```
 backend/     the Python app, installed with `pip install -e backend`
-frontend/    the browser player
+frontend/    the React app (Vite + TypeScript)
 docs/        this file and CONTEXT.md
 data/        tracks and uploads - never in version control
 ```
 
+Running it in development takes two servers: `woodshed serve` for the API on
+:8000, and `npm run dev` inside `frontend/` for the app on :5173. Vite forwards
+`/tracks`, `/stems` and `/jobs` to the API, so the browser only ever sees one
+origin and the code uses plain paths that also work in production. After
+`npm run build`, the backend serves the finished files itself.
+
 Separating backend from frontend now means the React port becomes a change
 inside one folder, rather than a reorganisation of everything at once.
+
+### The front end
+
+```
+frontend/src/
+├── audio/
+│   ├── AudioEngine.ts     all the sound. ~330 lines, zero React
+│   └── types.ts           StemName, Loop, PlayerState
+├── api/
+│   ├── client.ts          every call the browser makes
+│   └── types.ts           Track, BeatData, Job
+├── hooks/
+│   ├── usePlayer.ts       one engine, its state mirrored into React
+│   └── useKeyboard.ts     space, arrows, 1-6, esc
+├── components/
+│   ├── Waveform.tsx       canvas, bar lines, drag-to-loop
+│   ├── Transport.tsx      play, seek, clock, loop chip
+│   ├── Mixer.tsx          six stems: mute, solo, level
+│   ├── PracticePanel.tsx  speed, pitch, master
+│   └── Dropzone.tsx       upload
+└── App.tsx                assembles it
+```
+
+**React never touches the audio.** `AudioEngine` is a plain TypeScript class
+owning the graph, the six sources, the stretcher and the loop. It imports
+nothing from React; React owns the screen and calls methods on it.
+
+That separation is not stylistic. React re-renders constantly, and an audio
+graph is long-lived and timing-sensitive — rebuilt on render, the
+sample-accurate sync between stems would collapse immediately. So the engine
+lives in a ref, created once, and a thin hook passes messages.
+
+**Position deliberately never goes through React.** The waveform and the clock
+run their own animation frame and read `engine.position` directly. Only
+discrete changes — playing, levels, loop points — become React state.
+Re-rendering sixty times a second to advance a playhead would be pure waste.
+
+**Why TypeScript.** The engine passes stem names, level maps, loop objects and
+buffers between a dozen methods, and those are exactly the places a typo
+becomes a silent `undefined` at runtime. Renaming one field in the API response
+during the refactor broke the old JavaScript player invisibly; in TypeScript
+the editor flags every use the moment it changes.
 
 ### The backend
 
