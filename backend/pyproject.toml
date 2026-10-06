@@ -10,6 +10,17 @@ requires-python = ">=3.11"
 #
 #   pip install torch --index-url https://download.pytorch.org/whl/cu121 \
 #       --force-reinstall --no-deps
+#
+# The beat model is absent for the same reason: beat-this and
+# rotary-embedding-torch both ask for torch, and must be installed with
+# --no-deps so they use the CUDA build already there (torchaudio too, from
+# the same cu121 index). Their remaining needs are listed below.
+#
+#   pip install beat-this rotary-embedding-torch --no-deps
+#
+# Whisper (lyrics) likewise asks for torch:
+#
+#   pip install openai-whisper --no-deps
 dependencies = [
     "audio-separator",
     "onnxruntime",          # plain build only; never onnxruntime-gpu
@@ -17,6 +28,11 @@ dependencies = [
     "numpy",
     "librosa",
     "audioread",
+    "einops",               # used by the beat model
+    "soxr",
+    "tqdm",
+    "tiktoken",             # used by Whisper
+    "more-itertools",
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",

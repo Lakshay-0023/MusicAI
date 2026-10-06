@@ -8,7 +8,7 @@ from .. import tracks
 from ..config import STEM_NAMES, settings
 from ..storage import storage
 from . import encoding
-from .analysis import beats
+from .analysis import beats, chords, lyrics
 
 
 def separate(source: Path | str, force: bool = False, on_step=None) -> str:
@@ -53,6 +53,22 @@ def separate(source: Path | str, force: bool = False, on_step=None) -> str:
 
     step("finding beats")
     beats.detect(tid)
+
+    # Chords are a bonus on top of the stems, never a reason to lose them: if
+    # this fails, the track is still finished, and the player asks again later.
+    step("finding chords")
+    try:
+        chords.detect(tid)
+    except Exception as error:  # noqa: BLE001 - any failure here is survivable
+        step(f"chords skipped ({error})")
+
+    # Same rule for lyrics, the slowest of the three. A song with no singing
+    # simply comes back with no lines.
+    step("writing down the lyrics")
+    try:
+        lyrics.detect(tid)
+    except Exception as error:  # noqa: BLE001
+        step(f"lyrics skipped ({error})")
 
     # Written last on purpose - see tracks.is_ready().
     tracks.write(tracks.Track(id=tid, source=source.name,

@@ -2,13 +2,15 @@ import { useRef, useState } from 'react'
 
 /** Where a song comes in. Accepts video too - phone recordings of a band
  *  arrive as .mov, and the server strips the audio before separating. */
-export function Dropzone({ onFile }: { onFile: (file: File) => void }) {
+export function Dropzone({ onFile, compact = false }: { onFile: (file: File) => void; compact?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
 
+  // Once there is a library, adding a song is occasional and the player is
+  // what matters, so the dropzone shrinks to a single line.
   return (
     <div
-      className={`dropzone${over ? ' over' : ''}`}
+      className={`dropzone${over ? ' over' : ''}${compact ? ' compact' : ''}`}
       onDragEnter={(event) => {
         event.preventDefault()
         setOver(true)
@@ -22,7 +24,7 @@ export function Dropzone({ onFile }: { onFile: (file: File) => void }) {
         if (file) onFile(file)
       }}
     >
-      <strong>Drop a song here</strong>
+      <strong>{compact ? 'Drop another song here' : 'Drop a song here'}</strong>
       <span>
         or{' '}
         <button type="button" className="linkish" onClick={() => inputRef.current?.click()}>

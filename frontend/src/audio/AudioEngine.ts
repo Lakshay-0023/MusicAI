@@ -111,7 +111,12 @@ export class AudioEngine {
     // that carries its own compiled WebAssembly. The path is held in a
     // variable so TypeScript treats it as a runtime value rather than trying
     // to resolve a file that only exists once the server is running.
-    const modulePath = '/vendor/SignalsmithStretch.mjs'
+    //
+    // A full URL, not a bare "/vendor/..." path: in development Vite tags any
+    // dynamic import starting with "/" or "." as source code to transform,
+    // then refuses because files in public/ are never transformed. A full
+    // address passes through untouched and is served as a plain static file.
+    const modulePath = new URL('/vendor/SignalsmithStretch.mjs', window.location.origin).href
     const { default: createStretch } = await import(/* @vite-ignore */ modulePath)
     this.stretch = (await createStretch(this.ctx)) as StretchNode
 

@@ -9,7 +9,7 @@ import sys
 
 from . import tracks
 from .audio import mixing, separation
-from .audio.analysis import beats
+from .audio.analysis import beats, chords, lyrics
 from .config import STEM_NAMES
 
 
@@ -29,8 +29,18 @@ def build_parser() -> argparse.ArgumentParser:
         mix.add_argument(f"--{name.lower()}", type=float, default=1.0, metavar="GAIN",
                          help=f"{name} level: 0 = silent, 1 = untouched")
 
-    analyse = commands.add_parser("analyse", help="find the beats in a song already split")
+    analyse = commands.add_parser("analyse", help="find the beats and bars in a song already split")
     analyse.add_argument("song")
+
+    chord = commands.add_parser("chords", help="find the chords in a song already split, bar by bar")
+    chord.add_argument("song")
+    chord.add_argument("--full-mix", action="store_true",
+                       help="let the model hear every stem, vocals and drums too, to compare")
+
+    words = commands.add_parser("lyrics", help="transcribe the vocals of a song already split")
+    words.add_argument("song")
+    words.add_argument("--language", metavar="CODE",
+                       help='what is sung: "hi", "en", ... or "auto" (default from config)')
 
     commands.add_parser("list", help="show what has been processed")
 
@@ -58,7 +68,22 @@ def main(argv=None) -> None:
 
     elif args.command == "analyse":
         found = beats.detect(_require(args.song))
-        print(f"{found['tempo']} bpm, {len(found['beats'])} beats")
+        print(f"{found['tempo']} bpm, {found['beatsPerBar']} beats per bar, "
+              f"{len(found['downbeats'])} bars  ({found['method']})")
+
+    elif args.command == "chords":
+        track_id = _require(args.song)
+        found = chords.detect(track_id, STEM_NAMES if args.full_mix else None)
+        grid = beats.load(track_id) or beats.detect(track_id)
+        print(f"heard: {', '.join(found['stems'])}\n")
+        print(chords.chart(grid, found))
+
+    elif args.command == "lyrics":
+        found = lyrics.detect(_require(args.song), args.language)
+        print(f"language: {found['language']}  ({found['method']})\n")
+        for line in found["lines"]:
+            minutes, seconds = divmod(int(line["start"]), 60)
+            print(f"  {minutes}:{seconds:02d}  " + " ".join(w["text"] for w in line["words"]))
 
     elif args.command == "list":
         found = tracks.all_ready()

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { AudioEngine } from '../audio/AudioEngine'
 import type { Loop, PlayerState } from '../audio/types'
 import type { BeatData } from '../api/types'
+import { barStarts } from '../lib/bars'
 
 interface Props {
   engine: AudioEngine
@@ -22,6 +23,7 @@ export function Waveform({ engine, state, beats }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const peaksRef = useRef<Float32Array | null>(null)
   const [dragging, setDragging] = useState<Loop | null>(null)
+  const bars = useMemo(() => barStarts(beats), [beats])
 
   // Peaks are expensive to work out, so only when the song or the width changes.
   useEffect(() => {
@@ -75,15 +77,14 @@ export function Waveform({ engine, state, beats }: Props) {
     }
 
     function drawBarLines(context: CanvasRenderingContext2D, width: number, height: number) {
-      if (!beats?.beats.length || !state.duration) return
-      const perBar = beats.beatsPerBar || 4
+      if (!bars.length || !state.duration) return
 
       context.font = '10px system-ui, sans-serif'
       context.textBaseline = 'top'
 
-      for (let i = 0; i < beats.beats.length; i += perBar) {
-        const x = (beats.beats[i] / state.duration) * width
-        const barNumber = i / perBar + 1
+      for (let i = 0; i < bars.length; i++) {
+        const x = (bars[i] / state.duration) * width
+        const barNumber = i + 1
         const labelled = barNumber % 4 === 1
 
         context.fillStyle = labelled ? 'rgba(255,255,255,.24)' : 'rgba(255,255,255,.08)'
@@ -112,7 +113,7 @@ export function Waveform({ engine, state, beats }: Props) {
 
     frame = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(frame)
-  }, [engine, state.duration, state.loop, beats, dragging])
+  }, [engine, state.duration, state.loop, bars, dragging])
 
   // ---- selecting ----------------------------------------------------------
 
@@ -124,11 +125,10 @@ export function Waveform({ engine, state, beats }: Props) {
 
   /** The nearest bar line, so a rough drag still makes a musical loop. */
   function snapToBar(time: number): number {
-    if (!beats?.beats.length) return time
-    const perBar = beats.beatsPerBar || 4
-    let best = beats.beats[0]
-    for (let i = 0; i < beats.beats.length; i += perBar) {
-      if (Math.abs(beats.beats[i] - time) < Math.abs(best - time)) best = beats.beats[i]
+    if (!bars.length) return time
+    let best = bars[0]
+    for (const bar of bars) {
+      if (Math.abs(bar - time) < Math.abs(best - time)) best = bar
     }
     return best
   }

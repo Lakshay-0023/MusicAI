@@ -141,7 +141,7 @@ backend/                      installed with `pip install -e backend`
       separation.py           song -> six stems
       encoding.py             ffmpeg: Opus copies, audio out of video
       mixing.py               stems + levels -> one file
-      analysis/beats.py       tempo + beat times, from the DRUM stem
+      analysis/beats.py       tempo, beats, downbeats - Beat This! on the summed stems
     jobs/registry.py          tickets for work that outlives a request
     storage/{base,local}.py   where files live, behind one interface
 
@@ -150,6 +150,7 @@ frontend/                     React + Vite + TypeScript
     audio/AudioEngine.ts      ALL the sound. ~330 lines, zero React
     audio/types.ts            StemName, Loop, PlayerState
     api/{client,types}.ts     every call the browser makes
+    lib/bars.ts               barStarts(): downbeats, or every Nth beat for old data
     hooks/usePlayer.ts        one engine, its state mirrored into React
     hooks/useKeyboard.ts      space, arrows, 1-6, esc
     components/               Waveform · Transport · Mixer · PracticePanel · Dropzone
@@ -202,6 +203,11 @@ serves it on its own.
   page, all three API routes proxy correctly and the stretcher loads.
   **Nothing audible or visual has been verified** - playback, sync, sliders,
   waveform drawing and drag-to-loop are all still to be checked by ear and eye.
+- **Phase 10 code written** (2026-10-05): Beat This! beats + downbeats,
+  `lib/bars.ts`, docs. TypeScript compiles clean, and the meter and tempo
+  helpers were checked on synthetic grids (4/4 with a pickup, 3/4). Installed
+  and checked by him on real songs: bar lines land on "1" and loops snap
+  correctly.
 - **Phase 7 built** (2026-09-27): waveform, beat detection, bar lines,
   drag-to-loop with snapping, mute/solo, keyboard shortcuts. He confirmed bar
   lines land correctly and looping works. Beat detection measured 83.35 bpm on
@@ -259,16 +265,29 @@ through `usePlayer`. Two consequences that must not be undone:
 
 **The stretcher is loaded at runtime from `public/vendor/`,** not bundled - the
 import path is held in a variable so TypeScript treats it as a runtime value
-rather than a file to resolve at build time.
+rather than a file to resolve at build time. It must be a **full URL**
+(`new URL('/vendor/…', location.origin).href`). A bare `/vendor/…` path makes
+the Vite dev server add `?import` and then refuse to transform a public file
+("Failed to load url /vendor/SignalsmithStretch.mjs"). Fixed 2026-10-05.
 
 **Looping is done by the audio thread, not JavaScript** (`src.loop = true` with
 `loopStart`/`loopEnd`). Watching the clock in JS and jumping manually makes the
 wrap land late whenever the page is busy - exactly the stumble that makes
 looping useless for practice. Don't "simplify" it into a timer.
 
-**Beat detection runs on the DRUM stem**, at 22.05 kHz, and the grid is
-extended backwards to the song start because drums often enter late. Bars
-assume 4/4 - real downbeat detection would need madmom.
+**Beat detection uses Beat This!** (phase 10, 2026-10-05), a small PyTorch
+beat + downbeat network (checkpoint `final0`, `settings.beat_model`). It runs on
+the six stems summed back into a mono mix at 22.05 kHz, because it was trained
+on full mixes. The meter (`beatsPerBar`) is the median count of beats between
+downbeats. Both grids are extended backwards to the song start. The model is
+loaded per call and freed (`torch.cuda.empty_cache()`) so it never holds VRAM
+that Demucs needs. Install it with `pip install beat-this
+rotary-embedding-torch --no-deps` - never without `--no-deps`, or torch may be
+swapped for the CPU build. If it cannot be imported, `detect()` falls back to
+the old librosa rule on the DRUM stem with assumed 4/4 (`"method": "librosa"`).
+`load()` treats a `beats.json` without `downbeats` as missing, so old tracks
+re-analyse on first open. madmom was skipped: hard to install on Windows and
+Python 3.11+.
 
 **Mute/solo dim the row rather than moving the slider** - the level has to
 survive unmuting.
@@ -563,6 +582,34 @@ Two honest paths pulling in opposite directions:
 > legitimate route to the audio. Do not design around it; do not market the app
 > as a downloader.
 
+### ▶ Phases 10–13 — The chord finder (started 2026-10-05)
+Agreed after research: **no LLM and no agent.** Chords come from automatic
+chord estimation (spectrogram → chroma → trained network → smoothing), which is
+a fixed pipeline. An LLM is at most an optional "explain this progression"
+extra. Website chords are either typed in by people (Ultimate Guitar) or made by
+a model like this one (Chordify).
+
+- **10 ✅ Where the bars start** — Beat This! beats + downbeats (see §4).
+- **11 Chords** — `audio/analysis/chords.py`, the same detect/load shape.
+  Try **BTC** (Bi-directional Transformer, ~170 chord types, PyTorch) first,
+  compared against Chordino or autochord. Input is Bass + Other (+ Guitar/Piano)
+  stems. Make one chord decision per beat and snap changes to downbeats. Then
+  key detection and a "simplify" toggle. Expect about 80% accuracy on
+  major/minor and about 65% with 7ths.
+- **12 Lyrics + chord sheet (built 2026-10-05).** He wants it to work on *any*
+  audio (his own recordings), so lyrics come from **openai-whisper `turbo` on
+  the Vocals stem**, not LRCLIB.
+  - LRCLIB is left out for now, because it would send song titles off the
+    machine. It can come back as an opt-in later.
+  - **He wants Roman letters.** Whisper writes Devanagari, and `roman.py`
+    converts it to casual Hinglish (schwa deletion). Hindi and Urdu are both
+    transcribed as `hi`.
+  - The beat-by-beat chart was **dropped at his request** ("too detailed").
+    The lyrics sheet is the main view, with a simple per-bar list for
+    instrumentals.
+- **13 Next:** edit-lyrics mode, key detection and per-song spelling, and
+  optional LRCLIB.
+
 ---
 
 ## 7. Rules that will save weeks
@@ -572,7 +619,9 @@ Two honest paths pulling in opposite directions:
 - **Check that stems sum back to the original.** If they do not, every level
   you set lies to the user. Build the check into the pipeline, not just phase 2.
 - **One stretcher on the master bus.** Never one per stem.
-- **Analyse beats on the drum stem, not the mix.** Free accuracy.
+- **Match the input to the analyser.** The old librosa rule wanted the drum stem
+  alone. The Beat This! model was trained on full mixes, so it gets the stems
+  summed back together. Chord detection will want the harmonic stems.
 - **Ship compressed stems (Opus), keep the WAVs.** Six WAV stems is a huge
   download; Opus is ~1/10 the size at transparent quality.
 - **Expect bleed and design around it.** An "isolate" mode that ducks the other
@@ -591,6 +640,100 @@ Two honest paths pulling in opposite directions:
 ---
 
 ## 9. Immediate next steps
+
+**Phase 10 is done and verified (2026-10-05).**
+
+**Phase 11 backend written (2026-10-05).**
+- BTC is copied into `audio/analysis/btc/` (MIT; `np.float` fixed; class and
+  attribute names untouched so the state dict loads).
+- `chords.py` averages frame probabilities per beat and writes `chords.json`
+  (`start`/`end`/`label`/`name`).
+- Weights auto-download to `data/models/`.
+- The CLI prints a bar-by-bar chart with `woodshed chords`, and there is a
+  route at `/tracks/{id}/chords`.
+- Verified: all state-dict keys match, it runs on CUDA, and synthetic
+  C/Am/F/G7 tones came back exactly right.
+- **Chord UI built the same day.** `ChordLane` sits under the waveform
+  (circle-of-fifths colours; click to seek). `ChordPanel` has a big Now/Next
+  with a beat countdown, plus a 4-bars-a-row chart that auto-scrolls (paused
+  for 4s after a manual scroll); click a bar to seek, shift-click to loop.
+  Names follow the pitch control; Capo and Simple are kept in localStorage via
+  `lib/prefs.ts`. Focus mode is the F key. Chords are fetched only after beats
+  (avoids a double beat analysis), and `separation.py` runs chords after beats
+  inside a try/except so a failure never loses the stems.
+- Verified: tsc clean, production build OK, and the `lib/chords.ts` logic
+  checked on known inputs. He saw it in the browser and called the chords
+  "okayish". The beat chart was too detailed for him, which led to phase 12.
+- **Phase 12 built (2026-10-05).**
+  - **Backend:**
+    - `lyrics.py` runs Whisper turbo on the Vocals stem. Its custom loader
+      memory-maps the checkpoint and halves the weights (LayerNorm stays
+      fp32): about 1.6 GB of VRAM and a 3.2 GB RAM peak.
+    - It detects the language from the loudest 30 s of vocals and uses
+      `condition_on_previous_text=False` and
+      `hallucination_silence_threshold=2`.
+    - It writes `lyrics.json` (lines → words with start/end).
+    - `roman.py` matches 29/29 test words.
+    - There is a `woodshed lyrics` CLI command and a `/tracks/{id}/lyrics`
+      route; `separation.py` runs it after chords, in a try/except.
+  - **Frontend:**
+    - `lib/sheet.ts` pins chords to words. The word being sung wins, unless
+      the next word starts within 0.15 s. A short gap goes to the next word;
+      a gap over 2 bars becomes an Intro/Instrumental/Outro line. Each line
+      shows its opening chord, dimmed.
+    - `LyricSheet.tsx` highlights the current line (0.3 s early) and the sung
+      words, scrolls to a third of the way down, and seeks when a word is
+      clicked.
+    - Loading is chained: beats → chords → lyrics.
+  - **Verified:** tsc and the build pass, `sheet.ts` was checked on a made-up
+    song, and roman.py on test words.
+  - **First real run (2026-10-06) failed.** Auto language detection called
+    "Ae Dil Hai Mushkil" English (en 35%, with hi not in the top 5), so Whisper
+    wrote English sentences. Fixes:
+    - `lyrics_language = "hi"` in config, plus a `--language` CLI flag. Forced
+      `hi` is nearly word-perfect.
+    - A meta-device loader (`assign=True` from the mmap'd checkpoint; the mask
+      and alignment heads are made for real). The 3.2 GB-RAM loader crashed
+      with an access violation once the browser and editor were open; now
+      RAM use is about zero, VRAM 1.6 GB, peak 2.1 GB.
+    - Triton warnings are filtered.
+    - Line breaks: Whisper word times have no gaps on sung vocals, so lines
+      over 8 words are split at the deepest loudness dip in the vocal stem.
+  - The whole 5-minute song took 102 s.
+  - **UI simplified at his request (2026-10-06).**
+    - Now/Next is removed.
+    - Only the current line is highlighted (a band plus an accent bar), with no
+      word-by-word or chord flashing; upcoming lines stay readable and past
+      lines fade.
+    - `lib/tidy.ts`: blips are absorbed, repeats merged by displayed name, at
+      most 2 changes per bar. The first version, an on/off switch with a
+      max(half bar, 1.5 s) floor (156 → 74), was **too sparse** for him. It is
+      now a Chords level: All (156) / **Normal = half a bar, the default**
+      (113) / Minimal = plus a 1.5 s floor (74). Saved as pref
+      `chordDetail`.
+    - The tidied list feeds both the lane and the sheet (`shownChords` in
+      App).
+  - **Chord placement and smoothing redone (2026-10-06), after research into
+    how professional apps work.**
+    - **Smoothing:** Viterbi decoding with a chord-change penalty in
+      `chords.py` (`CHANGE_PENALTY`: all 0, normal 3, minimal 6). All three
+      levels are saved in `chords.json["levels"]`, and old files re-detect.
+      The browser `tidy.ts` now only merges chords that look identical.
+    - **Line ends:** `lyrics._hold_line_ends` stretches each line's last word
+      to where the vocal loudness drops 15 dB below the line level (0.3 s
+      quiet, max 8 s, never past the next line). Old lyrics.json files are
+      upgraded in `load()` via the `heldEnds` flag.
+    - **Placement rules in `sheet.ts`:** during a word → the word; within 1
+      beat before → the next word; within 1 bar after a line → that line's
+      `tail`; within 1 bar before → the next word; otherwise an instrumental
+      line.
+    - **Still to do from that research, in order:** an MMS forced-alignment
+      pass (torchaudio, already installed); an LLM correction and
+      romanisation pass (he will decide later, postponed); AcoustID + LRCLIB
+      lookup for released songs (opt-in); testing ChordFormer vs BTC.
+  - **Don't run two GPU jobs at once** (e.g. the CLI while the server is
+    analysing). One transient CUDA error happened, probably from that.
+- BTC cannot name inversions.
 
 **Check the React app by ear and eye** - that is the only thing standing
 between it and replacing the old player. Same tests as before: six stems in

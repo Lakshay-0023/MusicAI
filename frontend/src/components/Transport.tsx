@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { AudioEngine } from '../audio/AudioEngine'
 import type { PlayerState } from '../audio/types'
 import type { BeatData } from '../api/types'
+import { barStarts } from '../lib/bars'
 import { formatTime } from '../lib/format'
 
 interface Props {
@@ -70,13 +71,13 @@ export function Transport({ engine, state, beats }: Props) {
 
 /** "bars 13–17" where beats are known, otherwise a plain time range. */
 function describeLoop(start: number, end: number, beats: BeatData | null): string {
-  if (!beats?.beats.length) return `${formatTime(start)} – ${formatTime(end)}`
+  const bars = barStarts(beats)
+  if (!bars.length) return `${formatTime(start)} – ${formatTime(end)}`
 
-  const perBar = beats.beatsPerBar || 4
   const barAt = (time: number) => {
     let index = 0
-    for (let i = 0; i < beats.beats.length; i += perBar) {
-      if (beats.beats[i] <= time + 0.001) index = i / perBar
+    for (let i = 0; i < bars.length; i++) {
+      if (bars[i] <= time + 0.001) index = i
     }
     return index + 1
   }

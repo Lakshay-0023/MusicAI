@@ -62,6 +62,11 @@ button:disabled { opacity: 0.4; cursor: default; }
 }
 .dropzone strong { color: var(--ink); font-size: 0.95rem; }
 .dropzone.over { border-color: var(--accent); background: rgba(124, 130, 255, 0.07); }
+.dropzone.compact {
+  flex-direction: row; justify-content: center; align-items: baseline;
+  gap: 0.45rem; padding: 0.6rem 1rem;
+}
+.dropzone.compact strong { font-size: 0.85rem; }
 
 .linkish {
   background: none; border: 0; padding: 0; font: inherit;
@@ -95,6 +100,35 @@ select {
   touch-action: none;
 }
 
+/* ---- timeline: the waveform and its chord lane read as one surface ---- */
+.timeline { margin-bottom: 0.9rem; }
+.timeline .waveform { margin-bottom: 0; }
+.timeline:has(.chord-lane) .waveform {
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom-color: transparent;
+}
+
+.chord-lane {
+  position: relative; height: 30px; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.chord-lane .blocks { position: absolute; inset: 0; }
+.chord-lane .block {
+  position: absolute; top: 0; bottom: 0;
+  border: 0; border-top: 2px solid; border-right: 1px solid var(--bg);
+  padding: 0 0 0 4px; color: var(--ink);
+  font-size: 0.7rem; font-weight: 600; text-align: left;
+  white-space: nowrap; overflow: hidden;
+  opacity: 0.7; transition: opacity 0.15s;
+}
+.chord-lane .block:hover { opacity: 1; }
+.chord-lane .block.now { opacity: 1; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35); }
+.chord-lane .playhead {
+  position: absolute; top: 0; bottom: 0; width: 2px; transform: translateX(-1px);
+  background: var(--ink); pointer-events: none;
+}
+
 /* ---- transport ---- */
 .transport {
   display: flex; align-items: center; gap: 1rem;
@@ -115,6 +149,134 @@ select {
   font-size: 0.82rem; color: var(--ink-2); white-space: nowrap;
 }
 .loop-chip strong { color: var(--ink); }
+
+/* ---- chords: the music stand ---- */
+.chords { margin-bottom: 1rem; }
+.chords-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.8rem; flex-wrap: wrap; margin-bottom: 0.9rem;
+}
+.chords-head .panel-title { margin: 0; }
+.chord-options { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+.chip {
+  font-size: 0.75rem; color: var(--ink-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.55rem;
+}
+.toggle {
+  background: transparent; color: var(--ink-2);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 0.3rem 0.65rem; font-size: 0.8rem; font-weight: 600;
+}
+.toggle:hover { color: var(--ink); }
+.toggle.on { background: rgba(124, 130, 255, 0.16); border-color: var(--accent); color: var(--ink); }
+
+/* A few buttons acting as one control, one of them chosen. */
+.segmented { display: flex; align-items: center; }
+.segmented .stepper-label { margin-right: 0.4rem; }
+.segmented button {
+  background: transparent; color: var(--ink-2);
+  border: 1px solid var(--line); margin-left: -1px;
+  padding: 0.3rem 0.6rem; font-size: 0.8rem; font-weight: 600;
+}
+.segmented button:first-of-type { border-radius: 6px 0 0 6px; margin-left: 0; }
+.segmented button:last-of-type { border-radius: 0 6px 6px 0; }
+.segmented button:hover { color: var(--ink); }
+.segmented button.on {
+  position: relative; background: rgba(124, 130, 255, 0.16);
+  border-color: var(--accent); color: var(--ink);
+}
+
+.stepper.small { gap: 0.3rem; }
+.stepper.small button { width: 1.6rem; height: 1.6rem; font-size: 0.9rem; }
+.stepper.small .reading { min-width: 1rem; font-size: 0.82rem; }
+.stepper-label { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); margin-right: 0.1rem; }
+
+.chords-wait {
+  display: flex; align-items: center; gap: 0.6rem;
+  color: var(--ink-2); font-size: 0.88rem; padding: 1.2rem 0.2rem;
+}
+.chords-wait.failed { color: var(--vocals); }
+.pulse {
+  width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse { 50% { opacity: 0.25; transform: scale(0.7); } }
+
+/* The chord sheet, read like simple karaoke: the line being sung sits in a
+   soft band, the lines coming up stay clearly readable with their chords, and
+   lines already sung fade. Only whole lines change - nothing smaller moves.
+
+   position:relative so each line's offsetTop is measured from the sheet, not
+   the page. The large bottom padding lets the last line still scroll up to
+   the reading position; the faded top and bottom edges show there is more. */
+.sheet {
+  position: relative; max-height: min(62vh, 36rem); overflow-y: auto; scrollbar-width: thin;
+  padding: 0.6rem 0.2rem 55%; margin: 0 -0.2rem;
+  mask-image: linear-gradient(transparent 0, #000 1.2rem, #000 calc(100% - 2.5rem), transparent);
+}
+.line {
+  display: flex; flex-wrap: wrap; align-items: flex-end;
+  column-gap: 0.36em; row-gap: 0.3rem;
+  margin: 0 0 0.3rem; padding: 0.45rem 0.8rem; border-radius: 10px;
+  font-size: 1.22rem; line-height: 1.3;
+  opacity: 0.62; transition: opacity 0.3s, background-color 0.3s, box-shadow 0.3s;
+}
+.line.past { opacity: 0.3; }
+.line.current {
+  opacity: 1;
+  background: rgba(124, 130, 255, 0.12);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* One word = a stack: its chord on top, the word below. The chord can never
+   drift off its word, and a long chord name widens the word's box rather
+   than overlapping the next one. */
+.w { display: inline-flex; flex-direction: column; cursor: pointer; }
+.w:hover .t { text-decoration: underline; text-decoration-color: var(--line); }
+.w .c { min-height: 1.25em; font-size: 0.8em; line-height: 1.25; white-space: nowrap; }
+.w .t { color: var(--ink); }
+/* Chords after the last word, while the line is still ringing. */
+.w.tail { cursor: default; margin-left: 0.5em; }
+
+.sym { font-weight: 750; margin-right: 0.35em; }
+.sym.carried { opacity: 0.45; }
+
+.line.inst { align-items: baseline; gap: 0.9rem; cursor: pointer; font-size: 1.05rem; }
+.inst .tag {
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+
+/* Bar by bar, for songs without singing: four bars a row, names only. */
+.bar-list {
+  position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px; max-height: 13.6rem; overflow-y: auto; scrollbar-width: thin;
+}
+.bar {
+  position: relative; cursor: pointer;
+  background: var(--panel-2); border: 1px solid transparent; border-radius: 6px;
+  padding: 1rem 0.55rem 0.5rem; transition: background 0.15s, border-color 0.15s;
+}
+.bar:hover { border-color: var(--line); }
+.bar.current { border-color: var(--accent); background: rgba(124, 130, 255, 0.09); }
+.bar-no {
+  position: absolute; top: 0.2rem; left: 0.45rem;
+  font-size: 0.62rem; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+.bar .names { display: flex; gap: 0.6rem; font-size: 1rem; font-weight: 700; white-space: nowrap; }
+.bar .names .carried { opacity: 0.45; }
+
+@media (max-width: 720px) {
+  .bar-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .line { font-size: 1.08rem; padding: 0.4rem 0.6rem; }
+}
+
+/* Focus mode: only what you read while playing, and bigger. */
+.app.focus { max-width: 72rem; }
+.app.focus .sheet { max-height: 74vh; }
+.app.focus .line { font-size: clamp(1.4rem, 2.6vw, 1.9rem); }
+.app.focus .bar-list { max-height: 24rem; }
 
 /* ---- two column body ---- */
 .console { display: grid; grid-template-columns: 1.55fr 1fr; gap: 1rem; align-items: start; }

@@ -1,4 +1,4 @@
-import type { BeatData, Job, Track } from './types'
+import type { BeatData, ChordData, Job, LyricsData, Track } from './types'
 
 /**
  * Everything the browser knows how to ask the server.
@@ -19,6 +19,10 @@ export const api = {
   track: (id: string) => get<Track>(`/tracks/${id}`),
 
   beats: (id: string) => get<BeatData>(`/tracks/${id}/beats`),
+
+  chords: (id: string) => get<ChordData>(`/tracks/${id}/chords`),
+
+  lyrics: (id: string) => get<LyricsData>(`/tracks/${id}/lyrics`),
 
   /**
    * Hand the server a song and get a ticket back, immediately.

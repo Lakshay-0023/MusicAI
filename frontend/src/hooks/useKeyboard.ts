@@ -5,6 +5,7 @@ interface Handlers {
   seekBy: (seconds: number) => void
   muteSlot: (slot: number) => void
   clearLoop: () => void
+  toggleFocus: () => void
 }
 
 /**
@@ -37,6 +38,8 @@ export function useKeyboard(handlers: Handlers): void {
         ref.current.seekBy(5)
       } else if (event.code === 'Escape') {
         ref.current.clearLoop()
+      } else if (event.code === 'KeyF' && !event.ctrlKey && !event.metaKey) {
+        ref.current.toggleFocus()
       } else {
         const slot = Number(event.key)
         if (slot >= 1 && slot <= 6) ref.current.muteSlot(slot - 1)

@@ -37,9 +37,35 @@ class Settings:
     opus_bitrate: str = "96k"
 
     # Beat tracking needs nothing above a few kHz, and halving the sample rate
-    # roughly halves the time it takes.
+    # roughly halves the time it takes. It is also the rate Beat This! was
+    # trained at, so the model never has to resample.
     analysis_sample_rate: int = 22050
+
+    # Which trained Beat This! weights to use; downloaded on first use.
+    beat_model: str = "final0"
+
+    # Only used when the model is unavailable and the meter must be assumed.
     beats_per_bar: int = 4
+
+    # The stems the chord model hears: harmony only. Drums are noise to it, and
+    # a sung melody note looks like a chord note. `woodshed chords --full-mix`
+    # lets it hear everything, to compare.
+    chord_stems: tuple = ("Bass", "Guitar", "Piano", "Other")
+
+    # BTC's trained weights (large vocabulary, 170 chords), fetched on first use.
+    chord_model_url: str = ("https://raw.githubusercontent.com/jayg996/BTC-ISMIR19/"
+                            "master/test/btc_model_large_voca.pt")
+
+    # Which Whisper model transcribes the vocals. "turbo" is large-v3 with a
+    # slimmer decoder: near-best accuracy, ~1.6GB of GPU memory at 16 bits.
+    # "small" (~0.5GB) is the fallback if memory ever runs out.
+    lyrics_model: str = "turbo"
+
+    # The language sung, as a Whisper code: "hi" (shown in Roman letters),
+    # "en", ... or "auto" to let Whisper guess. On singing its guess is poor -
+    # it heard a Hindi song as English and wrote English sentences - so it is
+    # told. Hindi mode copes with the odd English word in a Bollywood lyric.
+    lyrics_language: str = "hi"
 
     @property
     def web_dir(self) -> Path:
@@ -59,6 +85,11 @@ class Settings:
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
+
+    @property
+    def models_dir(self) -> Path:
+        """Downloaded model weights. Like the stems, never in version control."""
+        return self.data_dir / "models"
 
 
 settings = Settings()
