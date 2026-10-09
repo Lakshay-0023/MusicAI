@@ -43,6 +43,9 @@ export interface LyricWord {
 export interface LyricLine {
   start: number
   end: number
+  /** When the voice actually stops - can be well after the last word, on a
+   *  held note or a fade. */
+  held?: number
   words: LyricWord[]
 }
 

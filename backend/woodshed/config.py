@@ -34,6 +34,14 @@ class Settings:
         "segments_enabled": True,
     })
 
+    # Songs are separated a chunk at a time so memory does not grow with song
+    # length (see separation._separate_in_chunks). Neighbouring chunks overlap,
+    # and are crossfaded there so no seam can be heard. 30s, not 60s: with a
+    # browser and editor open and ~0.5GB free, 60s chunks still crashed, while
+    # 30s ones peaked at ~0.9GB of RAM and finished.
+    separation_chunk_seconds: float = 30.0
+    separation_overlap_seconds: float = 4.0
+
     opus_bitrate: str = "96k"
 
     # Beat tracking needs nothing above a few kHz, and halving the sample rate

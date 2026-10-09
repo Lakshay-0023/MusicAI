@@ -1,7 +1,10 @@
 """One song in, six stems out. The slow half of the system."""
 
+import shutil
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
 from audio_separator.separator import Separator
 
 from .. import tracks
@@ -31,22 +34,16 @@ def separate(source: Path | str, force: bool = False, on_step=None) -> str:
 
     folder = storage.ensure(tid)
 
-    # The video is hashed as it arrived, so the track id stays tied to the
-    # file the user actually has - only the model sees the extracted audio.
-    audio_path = source
-    if encoding.is_video(source):
-        step("extracting audio")
-        audio_path = encoding.extract_audio(source, folder)
+    # The upload is hashed as it arrived, so the track id stays tied to the
+    # file the user actually has - only the model sees the decoded audio.
+    step("decoding")
+    audio_path = encoding.decode(source, folder)
 
     step("separating")
-    separator = Separator(output_dir=str(folder), demucs_params=settings.demucs_params)
-    separator.load_model(model_filename=settings.separation_model)
-    written = separator.separate(str(audio_path))
-
-    if audio_path != source:
+    try:
+        _separate_in_chunks(audio_path, folder, step)
+    finally:
         audio_path.unlink(missing_ok=True)
-
-    _rename_outputs(folder, written)
 
     step("encoding")
     encoding.write_opus_copies(folder)
@@ -76,12 +73,83 @@ def separate(source: Path | str, force: bool = False, on_step=None) -> str:
     return tid
 
 
-def _rename_outputs(folder: Path, written: list[str]) -> None:
-    """The model names files "<song>_(Drums)_htdemucs_6s.wav". Rename to a
-    plain "Drums.wav" so nothing downstream has to care."""
-    for filename in written:
-        produced = folder / Path(filename).name
-        for name in STEM_NAMES:
-            if f"({name})" in produced.name:
-                produced.replace(folder / f"{name}.wav")
-                break
+def _separate_in_chunks(audio_path: Path, folder: Path, step) -> None:
+    """Separate a song a piece at a time, so memory does not grow with length.
+
+    Given a whole song, Demucs builds all six stems for all of it in memory at
+    once: for a 5.7-minute song, one 687MB block on top of its working copies,
+    which an 8GB laptop with a browser open could not find ("Unable to
+    allocate 687 MiB"). So the song goes through in chunks:
+
+        |----- chunk 1 -----|
+                        |XXXX----- chunk 2 -----|
+                                            |XXXX----- chunk 3 ---|
+                         ^ overlap, crossfaded
+
+    Each chunk is read from the decoded WAV on disk, separated, and its stems
+    appended to the six stem files before the next is read, so only one chunk
+    is ever in memory: the same few hundred MB for a 3-minute song or a
+    15-minute live set.
+
+    Neighbouring chunks overlap, and across the overlap one fades out as the
+    next fades in. A cut with no overlap would click: the model sees less
+    context at the very edge of a chunk, so its output there is slightly
+    different from the same moment heard mid-chunk. Blending the two hides the
+    seam completely - Demucs does exactly this inside itself, on smaller
+    pieces, for the same reason.
+    """
+    info = sf.info(str(audio_path))
+    rate, total = info.samplerate, info.frames
+    length = int(settings.separation_chunk_seconds * rate)
+    overlap = int(settings.separation_overlap_seconds * rate)
+    count = max(1, -(-total // length))  # chunks needed, rounded up
+
+    parts = folder / "parts"
+    parts.mkdir(exist_ok=True)
+    separator = Separator(output_dir=str(parts), demucs_params=settings.demucs_params)
+    separator.load_model(model_filename=settings.separation_model)
+
+    writers = {name: sf.SoundFile(str(folder / f"{name}.wav"), "w", rate, 2, subtype="PCM_16")
+               for name in STEM_NAMES}
+    tails = {}     # each stem's last `overlap` frames, held back to blend with the next chunk
+    fade_in = np.linspace(0.0, 1.0, overlap, dtype=np.float32)[:, None]
+
+    try:
+        for i in range(count):
+            if count > 1:
+                step(f"separating {i + 1}/{count}")
+            start = max(0, i * length - overlap)
+            stop = min(total, (i + 1) * length)
+            chunk = parts / f"chunk{i:03d}.wav"
+            sf.write(str(chunk), sf.read(str(audio_path), start=start, stop=stop, dtype="float32")[0], rate)
+
+            produced = [parts / Path(f).name for f in separator.separate(str(chunk))]
+            chunk.unlink(missing_ok=True)
+            last = i == count - 1
+
+            for name in STEM_NAMES:
+                path = next(p for p in produced if f"({name})" in p.name)
+                stem, _ = sf.read(str(path), dtype="float32", always_2d=True)
+                path.unlink(missing_ok=True)
+                stem = _fit(stem, stop - start)
+
+                if i > 0:
+                    # Fade the held-back end of the last chunk into this one's start.
+                    stem[:overlap] = tails[name] * (1 - fade_in) + stem[:overlap] * fade_in
+                if last:
+                    writers[name].write(stem)
+                else:
+                    writers[name].write(stem[:-overlap])
+                    tails[name] = stem[-overlap:]
+    finally:
+        for writer in writers.values():
+            writer.close()
+        shutil.rmtree(parts, ignore_errors=True)
+
+
+def _fit(stem, frames: int):
+    """Trim or pad a stem to exactly the chunk's length, so chunks line up
+    sample for sample however the model rounded its output."""
+    if len(stem) >= frames:
+        return stem[:frames]
+    return np.pad(stem, ((0, frames - len(stem)), (0, 0)))

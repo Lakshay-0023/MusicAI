@@ -373,6 +373,43 @@ The model works through the song in chunks on the GPU, and each finished chunk
 is written back into RAM where the full-length result is assembled. So a large
 VRAM does not rescue you from a small RAM, and vice versa.
 
+### Separating long songs in chunks (added later)
+
+A 5.7-minute song failed with **"Unable to allocate 687 MiB for an array with
+shape (6, 2, 15001600)"**. Given a whole song, Demucs builds all six stems for
+*all of it* in memory at once: 6 stems × 2 channels × 15 million samples × 4
+bytes = 687 MB in one block, plus working copies. With a browser and editor
+open, the laptop had about 0.5 GB free.
+
+So now **every song goes through in chunks**:
+
+```
+|----- chunk 1 -----|
+                |XXXX----- chunk 2 -----|
+                                    |XXXX----- chunk 3 -----|
+                 ^ 4 s overlap, crossfaded
+```
+
+1. The upload is first **decoded to a plain WAV** on disk (ffmpeg), so any
+   piece of it can be read without loading the rest.
+2. Each 30-second chunk is read, separated, and its stems are **appended** to
+   the six stem files before the next chunk is read. Only one chunk is ever
+   in memory, so a 3-minute song and a 15-minute live set need the same RAM.
+3. Neighbouring chunks overlap by 4 seconds, and across the overlap one
+   **fades out as the next fades in**. Cutting with no overlap would click:
+   the model sees less context at the very edge of a chunk, so its output
+   there differs slightly from the same moment heard mid-chunk. Demucs does
+   exactly this inside itself, on smaller pieces, for the same reason.
+
+**Measured on that song:**
+- It separated in 86 s, and the stems are exactly the original's length.
+- The Phase 2 check (stems add back up to the original) shows **no seams**:
+  the leftover error around each join is in the same range as in the middle of
+  a chunk.
+- 60-second chunks still crashed with ~0.5 GB free. 30-second ones peaked at
+  about 0.9 GB of RAM and finished, so 30 s it is
+  (`separation_chunk_seconds` in `config.py`).
+
 ---
 
 ## 6. Phase 2 — What audio actually is
@@ -1958,24 +1995,60 @@ dropped:**
 Perfect lines from audio alone are not realistic. The edit-lyrics step
 (phase 13) is the real fix.
 
-### When does a line really end?
+### Precise word times: a forced aligner
 
-Whisper ends a word where its attention moves on. On a **held note** that is
-far too early: it put the end of a held "Besabriyaa…n" at 36.1 s, while the
-singer carried on to 38.1 s. Chords played under the held note then looked as
-if they fell in a pause, and were pinned to the *next* line.
+Whisper's word times are a by-product of how it reads, not a measurement. On
+singing it makes **every word start the instant the previous one ended**, so
+the pause before a word, and often a held note, is swallowed into the next
+word's start. A chord landing in that pause gets pinned to the wrong word.
+This was the main source of misplaced chords.
 
-So each line's last word is stretched to where the **voice actually stops**.
-From Whisper's end, follow the vocal stem's loudness until it has dropped
-15 dB below the line's own level, and stays there for 0.3 s so a breath does
-not count. It never goes past the next line's start, and never more than 8 s.
-This is the same idea as the 2025 research approach, which uses the separated
-vocal as a voice-activity detector.
+The fix is the tool professional karaoke and lyric-sync services use: a
+**forced aligner**. It does one job. Given the audio and the words already
+known to be in it, it finds exactly where each word is. Ours is **MMS**
+(Meta's Massively Multilingual Speech, 1,100+ languages). It ships with
+torchaudio, so nothing extra was installed; the weights (1.26 GB) download
+once to `data/models/mms/`.
 
-Measured: 10–11 line ends per song moved later, by up to 4.5 s, all held
-notes and fade-outs (36.1 → 38.1 s; a final fade 52.5 → 57.0 s). Older lyrics
-are updated the first time they are opened. That only needs the loudness, a
-couple of seconds; Whisper is not re-run.
+**How it works.** The model hears the audio as a stream of *letter*
+probabilities, one set every 20 ms: "this moment sounds like *a*, the next
+like *a*, then *y*…". Given the words in order (in plain a–z, which is why
+the Roman lyrics matter), it finds the path through those probabilities that
+spells them out (the same "best path" idea as the chord decoder). Each word's
+span is where its letters were heard.
+
+**Line by line.** Each line is aligned only within its own window (Whisper's
+span plus a second either side), so a badly misheard line cannot drag the
+rest of the song off with it. A line that fails keeps Whisper's times.
+
+**Measured, not assumed.** A sung word starts with a burst of vocal energy,
+an *onset*, which librosa can detect in the vocal stem independently of both
+models. Comparing each word's start with the nearest onset, over both songs:
+
+| | Whisper's word starts | Aligner's word starts |
+| --- | --- | --- |
+| Typical distance from the real vocal onset | 0.13–0.14 s | **0.03–0.04 s** |
+| Within 0.15 s of an onset (Ae Dil Hai Mushkil) | 55% | **92%** |
+
+The aligner was better even on the words it was least confident about, so it
+is used for every word. It takes 10–20 seconds a song; older songs are
+re-timed the first time they are opened, without re-running Whisper.
+
+### When does a line really stop ringing?
+
+After a line's last word there can be more singing the words do not cover: a
+long "aaa" on the final syllable, a fade. Chords played under it belong to
+that line. So from the last word's end, the vocal's loudness is followed
+until it has dropped 15 dB below the line's own level and stays there for
+0.3 s, so a breath does not count. It never goes past the next line's start.
+That time is saved as the line's `held`. On "Besabriyaan", the last line's
+words end at 52.1 s and the voice carries on to 57.0 s.
+
+**An earlier version stretched the last word itself** to that point, back when
+Whisper's rough ends were all there was. With measured ends, that went wrong:
+a D landing on the dying end of "jahaan", just before "Besabriyaan", looked
+mid-word and stayed on "jahaan". Now the word keeps its measured end, and
+`held` is used only for chords *after* the last word.
 
 ### Pinning chords to words
 
@@ -1985,12 +2058,16 @@ independent: re-transcribing never touches the chords.
 
 For each chord, the first rule that fits wins:
 
-1. **A word is being sung:** the chord goes on that word. Exception: if the
-   next word starts under 0.15 s later, the chord is anticipating it, so it
-   goes on the next word.
-2. **Within one beat before a word:** a lead-in. It goes on that word.
-3. **Within one bar after a line ends:** the line is still ringing, so the
-   chord stays **at the end of that line**, written after the last word.
+1. **A word is being sung:** the chord goes on that word. Exception: the
+   chord is *anticipating* the next word. That means either the next word
+   starts under 0.15 s later, or the chord hits the **last quarter** of this
+   word with the next word **within a beat**. Players change chord just before
+   the singer, and a chart writes it over the coming word.
+2. **Within one beat before a word:** a lead-in. It goes on that word. ("A
+   beat" allows 0.15 s extra for detection's coarseness.)
+3. **Under the line's held note or fade, or within a bar after it:** the line
+   is still ringing, so the chord stays **at the end of that line**, written
+   after the last word.
 4. **Within one bar before the next line:** the run-up into it. It goes on the
    next line's first word.
 5. **Anything deeper into a long gap:** its own Intro / Instrumental / Outro
@@ -2004,14 +2081,18 @@ down to the next line, and the last line's trailing chords fell into the
 instrumental. Now:
 
 ```
-D A G               D
-Besabriyaan
-A G                 D
-Besabriyaan
-D A G               Bm A
-Besabriya
+           Bm   A               G
+Kyon suchna hai jaana kaha                ← G under the held "kahaa…"
+             Bm  A G
+Jaaye vahi  le  jaaye jahaan              ← A G under the held "jaaye…"
+D A G                       D
+Besabriyaan                               ← the D moved off "jahaan", onto here
+D                           A G Bm A
+Besabriya                                 ← chords under the long final fade
 [Instrumental]  G  Bm  A  Em  F#m  G  D
 ```
+
+The song's repeating **D A G** now lines up with each "Besabriyaan".
 
 Finally, **every line states the chord it opens on**, dimmed, if that chord
 started earlier. Any line can then be read on its own, which is what you need

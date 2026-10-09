@@ -10,14 +10,16 @@ def is_video(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_SUFFIXES
 
 
-def extract_audio(video: Path, into: Path) -> Path:
-    """Pull the soundtrack out of a video; the picture is discarded.
+def decode(source: Path, into: Path) -> Path:
+    """Any song or video -> a plain 44.1kHz stereo WAV; a video's picture is dropped.
 
-    Forced to 44.1kHz stereo so everything reaching the model looks the same
-    whatever the camera produced.
+    Done for every upload, not just videos: a WAV can be read a piece at a
+    time straight from disk, which is what lets a long song be separated in
+    chunks. Forcing one rate and layout also means everything reaching the
+    model looks the same, whatever the phone or the file format produced.
     """
     out = into / "source.wav"
-    _run(["-i", str(video), "-vn", "-ac", "2", "-ar", "44100", str(out)])
+    _run(["-i", str(source), "-vn", "-ac", "2", "-ar", "44100", str(out)])
     return out
 
 

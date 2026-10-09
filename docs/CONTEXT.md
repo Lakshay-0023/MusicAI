@@ -727,10 +727,24 @@ a model like this one (Chordify).
       beat before → the next word; within 1 bar after a line → that line's
       `tail`; within 1 bar before → the next word; otherwise an instrumental
       line.
-    - **Still to do from that research, in order:** an MMS forced-alignment
-      pass (torchaudio, already installed); an LLM correction and
-      romanisation pass (he will decide later, postponed); AcoustID + LRCLIB
-      lookup for released songs (opt-in); testing ChordFormer vs BTC.
+  - **Forced alignment done (2026-10-08).** He said the remaining errors were
+    mostly in the combining.
+    - `lyrics._align` uses torchaudio's `MMS_FA` (weights at
+      `data/models/mms`, 1.26 GB of VRAM). It aligns per line, in a window of
+      the Whisper span ±1 s, bounded by the neighbouring lines; a failing
+      line keeps Whisper's times.
+    - **Measured against librosa vocal onsets:** median 0.03–0.04 s off
+      (Whisper 0.13–0.14 s); 92% within 0.15 s (Whisper 55%).
+    - `_hold_line_ends` now only sets `line["held"]` and no longer stretches
+      the word, which had kept the D on "jahaan".
+    - The `aligned` flag replaces `heldEnds`; `load()` upgrades old files in
+      10–20 s.
+    - **`sheet.ts`:** a chord in the last quarter of a word with the next word
+      within a beat (+0.15 s) is anticipating that word, and the tail rule
+      uses `held`.
+  - **Still to do from that research:** an LLM correction and romanisation
+    pass (he will decide later, postponed); AcoustID + LRCLIB for released
+    songs (opt-in); testing ChordFormer vs BTC.
   - **Don't run two GPU jobs at once** (e.g. the CLI while the server is
     analysing). One transient CUDA error happened, probably from that.
 - BTC cannot name inversions.

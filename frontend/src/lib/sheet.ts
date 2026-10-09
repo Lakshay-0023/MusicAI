@@ -39,12 +39,16 @@ const EARLY = 0.15
 export function buildSheet(lines: LyricLine[], chords: Chord[], beats: BeatData | null): SheetLine[] {
   const beat = beats?.tempo ? 60 / beats.tempo : 0.5
   const bar = (beats?.beatsPerBar || 4) * beat
+  // "Within a beat", give or take detection's ~0.15s coarseness.
+  const aBeat = beat + EARLY
 
   const sheet = lines.map((line) => ({
     kind: 'lyric' as const,
     start: line.start,
     words: line.words.map((word): SheetWord => ({ ...word, chords: [], carried: null })),
     tail: [] as number[],
+    /** When the voice stops: the last word's end, or later on a held note. */
+    held: Math.max(line.held ?? 0, line.words[line.words.length - 1]?.end ?? 0),
   }))
   // Every word in the song in order, knowing which line it is in.
   const words = sheet.flatMap((line) => line.words.map((word) => ({ word, line })))
@@ -60,27 +64,36 @@ export function buildSheet(lines: LyricLine[], chords: Chord[], beats: BeatData 
     const after = words[at + 1]
     const untilNext = after ? after.word.start - t : Infinity
 
-    // 1. A word is being sung: it owns the chord - unless the next word starts
-    //    a moment later, in which case the chord is anticipating that word.
-    if (before && t < before.word.end && untilNext >= EARLY) {
+    // 1. A word is being sung: it owns the chord - unless the chord is really
+    //    anticipating the next word: that word starts a moment later, or the
+    //    chord lands in the last quarter of this word with the next one under
+    //    a beat away (a D hitting the dying end of "jahaan", just before
+    //    "Besabriyaan", belongs to "Besabriyaan").
+    const into = before ? (t - before.word.start) / (before.word.end - before.word.start || 1) : 0
+    const anticipates = untilNext < EARLY || (into > 0.75 && untilNext <= aBeat)
+    if (before && t < before.word.end && !anticipates) {
       before.word.chords.push(index)
       return
     }
 
     // 2. Just before a word - within a beat: a lead-in. It goes on that word.
-    if (after && untilNext <= beat) {
+    if (after && untilNext <= aBeat) {
       after.word.chords.push(index)
       return
     }
 
-    // 3. Within a bar after a line finished: the line is still ringing, so
-    //    the chord belongs to it, written after its last word. (A gap in the
-    //    middle of a line leads into the line's next word instead.)
-    if (before && t - before.word.end <= bar) {
+    // 3. Still inside the line's sound - under a held note or fade after its
+    //    last word, or within a bar of it ending: the chord belongs to that
+    //    line, written after its last word. (A gap in the middle of a line
+    //    leads into the line's next word instead.)
+    if (before) {
       const lastOfLine = before.word === before.line.words[before.line.words.length - 1]
-      if (lastOfLine) before.line.tail.push(index)
-      else after!.word.chords.push(index)
-      return
+      const ringsUntil = lastOfLine ? before.line.held : before.word.end
+      if (t - ringsUntil <= bar) {
+        if (lastOfLine) before.line.tail.push(index)
+        else after!.word.chords.push(index)
+        return
+      }
     }
 
     // 4. Within a bar before the next line: the run-up into it.

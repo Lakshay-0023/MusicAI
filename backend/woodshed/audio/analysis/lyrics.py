@@ -3,7 +3,11 @@
 Runs once per track and writes lyrics.json next to the stems: every word with
 the moment it starts and ends, grouped into lines the way a singer phrases.
 
-    Vocals stem -> Whisper -> words + times -> (Hindi: Devanagari -> Roman) -> lines
+    Vocals stem -> Whisper -> words -> (Hindi: Devanagari -> Roman) -> lines
+                -> forced aligner -> precise word times -> held notes measured
+
+Whisper decides *what* is sung; a separate aligner decides *when*, because
+Whisper's own word times are too rough to pin chords to.
 
 It listens to the separated voice, not the song. Whisper was trained on
 speech, and drums and guitars confuse it badly; alone, the voice is as close to
@@ -11,6 +15,7 @@ speech as singing gets. Works on any audio with singing in it - a released
 song or a phone recording of your band - and nothing leaves the machine.
 """
 
+import re
 import warnings
 
 import numpy as np
@@ -49,15 +54,12 @@ def detect(track_id: str, language: str | None = None) -> dict:
     audio = load_mono(track_id, ("Vocals",), WHISPER_RATE).astype(np.float32)
     language, segments = _transcribe(audio, language or settings.lyrics_language)
 
-    lines = _lines(segments, romanise=language == "hi", audio=audio)
-    _hold_line_ends(lines, _loudness(audio))
-
     data = {
         "language": language,
-        "lines": lines,
+        "lines": _lines(segments, romanise=language == "hi", audio=audio),
         "method": f"whisper-{settings.lyrics_model}",
-        "heldEnds": True,
     }
+    _time_words(data, audio)
     storage.write_json(track_id, LYRICS_FILE, data)
     return data
 
@@ -65,19 +67,26 @@ def detect(track_id: str, language: str | None = None) -> dict:
 def load(track_id: str) -> dict | None:
     """Lyrics if they have been worked out, otherwise None.
 
-    Lyrics written before line ends were measured from the voice are brought
-    up to date here, once: it needs only the vocal's loudness - a couple of
-    seconds - not another minute and a half of Whisper.
+    Lyrics written before words were timed by the aligner are brought up to
+    date here, once. That needs only the text already saved and the vocal -
+    ten or twenty seconds - not another minute and a half of Whisper.
     """
     if not storage.exists(track_id, LYRICS_FILE):
         return None
     data = storage.read_json(track_id, LYRICS_FILE)
-    if not data.get("heldEnds"):
+    if not data.get("aligned"):
         audio = load_mono(track_id, ("Vocals",), WHISPER_RATE).astype(np.float32)
-        _hold_line_ends(data["lines"], _loudness(audio))
-        data["heldEnds"] = True
+        _time_words(data, audio)
         storage.write_json(track_id, LYRICS_FILE, data)
     return data
+
+
+def _time_words(data: dict, audio) -> None:
+    """Precise times for every word: the aligner first, then held notes."""
+    _align(data["lines"], audio)
+    _hold_line_ends(data["lines"], _loudness(audio))
+    data["aligned"] = True
+    data.pop("heldEnds", None)  # the old marker, superseded by this one
 
 
 # ---- listening -----------------------------------------------------------------
@@ -273,6 +282,89 @@ def _breath(before: dict, after: dict, loudness) -> float:
     return float(np.median(around) - inside.min())
 
 
+# ---- timing ---------------------------------------------------------------------
+
+# How far either side of Whisper's guess the aligner may look for a line.
+ALIGN_MARGIN_SECONDS = 1.0
+
+
+def _align(lines: list[dict], audio) -> None:
+    """Re-time every word with a forced aligner, line by line.
+
+    Whisper's word times are a by-product of how it reads, not a measurement,
+    and on singing it makes every word start the instant the last one ended -
+    so the pause before a word, and often a held note, gets swallowed into the
+    next word's start. A chord landing in that pause is then pinned to the
+    wrong word.
+
+    A forced aligner does one job: given audio and the words in it, find
+    exactly where each word is. This one is MMS (Meta's Massively
+    Multilingual Speech, 1,100+ languages, part of torchaudio). It hears the
+    audio as a stream of letter probabilities every 20ms, and finds the path
+    through them that spells out the words in order - each word's span is
+    where its letters were heard.
+
+    Measured against the vocal's own onsets (where singing audibly starts),
+    on two songs: Whisper's word starts were a median 0.13s off and 55%
+    within 0.15s; the aligner's were 0.03s off and 92% within 0.15s.
+
+    Each line is aligned in its own window, Whisper's span plus a second either
+    side, so a badly misheard line cannot drag the rest of the song with it. A
+    line that fails to align keeps Whisper's times.
+    """
+    import torch
+    from torchaudio.pipelines import MMS_FA
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = MMS_FA.get_model(dl_kwargs={"model_dir": str(settings.models_dir / "mms")})
+    model = model.to(device).eval()
+    tokenizer, aligner = MMS_FA.get_tokenizer(), MMS_FA.get_aligner()
+
+    # Windows from Whisper's times, all fixed before any line moves.
+    song_end = len(audio) / WHISPER_RATE
+    windows = []
+    for i, line in enumerate(lines):
+        lo = max(line["start"] - ALIGN_MARGIN_SECONDS, lines[i - 1]["end"] if i else 0.0)
+        hi = min(line["end"] + ALIGN_MARGIN_SECONDS,
+                 lines[i + 1]["start"] if i + 1 < len(lines) else song_end)
+        windows.append((lo, hi))
+
+    try:
+        for line, (lo, hi) in zip(lines, windows):
+            try:
+                _align_line(line, audio, lo, hi, model, tokenizer, aligner, device)
+            except Exception:  # noqa: BLE001 - one bad line keeps Whisper's times
+                continue
+    finally:
+        del model
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+
+def _align_line(line, audio, lo, hi, model, tokenizer, aligner, device) -> None:
+    import torch
+
+    # The aligner knows only plain letters; "jaaye," becomes "jaaye".
+    spelled = [re.sub(r"[^a-z']", "", w["text"].lower()) for w in line["words"]]
+    timed = [i for i, s in enumerate(spelled) if s]
+    if not timed:
+        return
+
+    clip = torch.from_numpy(audio[int(lo * WHISPER_RATE):int(hi * WHISPER_RATE)])
+    with torch.inference_mode():
+        emission, _ = model(clip.unsqueeze(0).to(device))
+        spans = aligner(emission[0], tokenizer([spelled[i] for i in timed]))
+
+    seconds_per_frame = clip.shape[0] / emission.shape[1] / WHISPER_RATE
+    for i, letters in zip(timed, spans):
+        word = line["words"][i]
+        word["start"] = round(lo + letters[0].start * seconds_per_frame, 3)
+        word["end"] = round(lo + letters[-1].end * seconds_per_frame, 3)
+
+    line["start"] = line["words"][0]["start"]
+    line["end"] = line["words"][-1]["end"]
+
+
 # The voice counts as stopped once it is this far below the line's own level.
 HELD_DROP_DB = 15
 # ...for at least this long, so a breath mid-note does not end it.
@@ -282,17 +374,21 @@ HELD_MAX_SECONDS = 8.0
 
 
 def _hold_line_ends(lines: list[dict], loudness) -> None:
-    """Stretch each line's last word to where the voice actually stops.
+    """Record, per line, when the voice actually stops: line["held"].
 
-    Whisper ends a word where its attention moves on, which on a held note is
-    far too early: it put the end of a held "Besabriyaa...n" at 36.1s, while
-    the voice carried on to 38.1s. Chords played under that held note then
-    looked as if they fell in a pause and were pinned to the next line.
+    After the last word there can be more singing the words do not cover - a
+    long "aaa" on the final syllable, a fade. Chords played under it belong to
+    that line, written after its last word, not to the next line.
 
-    So, from Whisper's end, follow the vocal's loudness until it has dropped
-    HELD_DROP_DB below the line's own level and stays there - never past the
-    next line's start. Measured on that song: 36.1 -> 38.1s, and a final
-    fade-out 52.5 -> 57.0s.
+    So, from the last word's end, follow the vocal's loudness until it has
+    dropped HELD_DROP_DB below the line's own level and stays there - never
+    past the next line's start. On "Besabriyaan", the last line's words end at
+    52.1s and the voice carries on to 57.0s.
+
+    The word's own end is left as the aligner measured it. An earlier version
+    stretched the word itself, back when Whisper's ends were all there was;
+    with measured ends, stretching made a chord on the dying end of "jahaan"
+    look like it was mid-word, when it was leading into the next line.
     """
     frames_per_second = WHISPER_RATE / LOUDNESS_HOP
     frame = lambda t: int(t * frames_per_second)
@@ -311,9 +407,7 @@ def _hold_line_ends(lines: list[dict], loudness) -> None:
         f = frame(last["end"])
         while f / frames_per_second < limit and loudness[f:f + quiet].max(initial=-999) >= floor:
             f += 1
-        end = round(max(last["end"], min(f / frames_per_second, limit)), 3)
-        last["end"] = end
-        line["end"] = end
+        line["held"] = round(max(last["end"], min(f / frames_per_second, limit)), 3)
 
 
 def _line(words: list[dict]) -> dict:
