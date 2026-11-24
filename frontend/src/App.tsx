@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { api } from './api/client'
-import type { BeatData, ChordData, Job, LyricLine, Track } from './api/types'
+import type { BeatData, ChordData, Job, LyricsData, Track } from './api/types'
 import { STEMS } from './audio/types'
 import { ChordLane } from './components/ChordLane'
 import { ChordPanel, type LoadStatus } from './components/ChordPanel'
 import { Dropzone } from './components/Dropzone'
+import { LyricsTools } from './components/LyricsTools'
 import { Mixer } from './components/Mixer'
 import { PracticePanel } from './components/PracticePanel'
 import { Transport } from './components/Transport'
@@ -25,7 +26,9 @@ export default function App() {
   const [beats, setBeats] = useState<BeatData | null>(null)
   const [chords, setChords] = useState<ChordData | null>(null)
   const [chordStatus, setChordStatus] = useState<LoadStatus>('idle')
-  const [lyrics, setLyrics] = useState<LyricLine[] | null>(null)
+  const [lyrics, setLyrics] = useState<LyricsData | null>(null)
+  // After an AI correction, the player can flip back to exactly what was heard.
+  const [showHeard, setShowHeard] = useState(false)
   const [lyricsStatus, setLyricsStatus] = useState<LoadStatus>('idle')
   const [job, setJob] = useState<Job | null>(null)
   const [notice, setNotice] = useState('Loading…')
@@ -80,6 +83,7 @@ export default function App() {
     setChords(null)
     setChordStatus('loading')
     setLyrics(null)
+    setShowHeard(false)
     setLyricsStatus('loading')
     setNotice('Loading stems…')
 
@@ -118,7 +122,7 @@ export default function App() {
       try {
         const found = await api.lyrics(id)
         if (cancelled) return
-        setLyrics(found.lines)
+        setLyrics(found)
         setLyricsStatus('ready')
       } catch {
         if (!cancelled) setLyricsStatus('error')
@@ -149,7 +153,7 @@ export default function App() {
     api
       .lyrics(selected)
       .then((data) => {
-        setLyrics(data.lines)
+        setLyrics(data)
         setLyricsStatus('ready')
       })
       .catch(() => setLyricsStatus('error'))
@@ -252,9 +256,20 @@ export default function App() {
         chords={shownChords}
         chordStatus={chordStatus}
         onRetryChords={retryChords}
-        lyrics={lyrics}
+        lyrics={lyrics ? (showHeard && lyrics.heardLines ? lyrics.heardLines : lyrics.lines) : null}
         lyricsStatus={lyricsStatus}
         onRetryLyrics={retryLyrics}
+        lyricsTools={
+          selected && lyrics?.lines.length ? (
+            <LyricsTools
+              trackId={selected}
+              data={lyrics}
+              showHeard={showHeard}
+              onShowHeard={setShowHeard}
+              onUpdated={setLyrics}
+            />
+          ) : null
+        }
         display={display}
         onCapo={setCapo}
         onSimplify={setSimplify}

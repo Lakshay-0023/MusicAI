@@ -81,9 +81,9 @@ def load(track_id: str) -> dict | None:
     return data
 
 
-def _time_words(data: dict, audio) -> None:
+def _time_words(data: dict, audio, aligner: "Aligner | None" = None) -> None:
     """Precise times for every word: the aligner first, then held notes."""
-    _align(data["lines"], audio)
+    _align(data["lines"], audio, aligner)
     _hold_line_ends(data["lines"], _loudness(audio))
     data["aligned"] = True
     data.pop("heldEnds", None)  # the old marker, superseded by this one
@@ -226,13 +226,16 @@ def _lines(segments, romanise: bool, audio) -> list[dict]:
     for segment in segments:
         current: list[dict] = []
         for word in segment.get("words", []):
-            text = word["word"].strip()
-            if romanise:
-                text = roman.romanise(text).strip()
+            heard = word["word"].strip()
+            text = roman.romanise(heard).strip() if romanise else heard
             if not text:
                 continue
 
-            entry = {"text": text, "start": round(word["start"], 3), "end": round(word["end"], 3)}
+            # "heard" is Whisper's own spelling (Devanagari for Hindi) and "p"
+            # how sure it was of the word. Neither is shown; both help an AI
+            # correction pass see what was actually heard and where to look hard.
+            entry = {"text": text, "start": round(word["start"], 3), "end": round(word["end"], 3),
+                     "heard": heard, "p": round(float(word.get("probability", 1.0)), 2)}
             if current and entry["start"] - current[-1]["end"] > LINE_GAP_SECONDS:
                 lines.extend(_line(part) for part in _split_long(current, loudness))
                 current = []
@@ -288,7 +291,7 @@ def _breath(before: dict, after: dict, loudness) -> float:
 ALIGN_MARGIN_SECONDS = 1.0
 
 
-def _align(lines: list[dict], audio) -> None:
+def _align(lines: list[dict], audio, aligner: "Aligner | None" = None) -> None:
     """Re-time every word with a forced aligner, line by line.
 
     Whisper's word times are a by-product of how it reads, not a measurement,
@@ -308,19 +311,11 @@ def _align(lines: list[dict], audio) -> None:
     on two songs: Whisper's word starts were a median 0.13s off and 55%
     within 0.15s; the aligner's were 0.03s off and 92% within 0.15s.
 
-    Each line is aligned in its own window, Whisper's span plus a second either
-    side, so a badly misheard line cannot drag the rest of the song with it. A
-    line that fails to align keeps Whisper's times.
+    Each line is aligned in its own window, its current span plus a second
+    either side, so a badly misheard line cannot drag the rest of the song
+    with it. A line that fails to align keeps the times it had.
     """
-    import torch
-    from torchaudio.pipelines import MMS_FA
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = MMS_FA.get_model(dl_kwargs={"model_dir": str(settings.models_dir / "mms")})
-    model = model.to(device).eval()
-    tokenizer, aligner = MMS_FA.get_tokenizer(), MMS_FA.get_aligner()
-
-    # Windows from Whisper's times, all fixed before any line moves.
+    # Windows from the current times, all fixed before any line moves.
     song_end = len(audio) / WHISPER_RATE
     windows = []
     for i, line in enumerate(lines):
@@ -329,40 +324,127 @@ def _align(lines: list[dict], audio) -> None:
                  lines[i + 1]["start"] if i + 1 < len(lines) else song_end)
         windows.append((lo, hi))
 
+    own = aligner is None
+    aligner = aligner or Aligner()
     try:
         for line, (lo, hi) in zip(lines, windows):
             try:
-                _align_line(line, audio, lo, hi, model, tokenizer, aligner, device)
-            except Exception:  # noqa: BLE001 - one bad line keeps Whisper's times
+                timed = aligner.place(audio, [w["text"] for w in line["words"]], lo, hi)
+            except Exception:  # noqa: BLE001 - one bad line keeps the times it had
                 continue
+            for word, found in zip(line["words"], timed):
+                if found:
+                    word["start"], word["end"] = found[0], found[1]
+            line["start"] = line["words"][0]["start"]
+            line["end"] = line["words"][-1]["end"]
     finally:
-        del model
-        if device == "cuda":
+        if own:
+            aligner.close()
+
+
+class Aligner:
+    """The MMS forced aligner, loaded once and used for two jobs.
+
+    place(): where are these words in this stretch of audio?
+    fit():   how well does the audio support these words being sung here?
+
+    fit() turns the aligner into a fact-checker for AI suggestions. Measured on
+    "Channa Mereya": correct lyrics scored 0.39-0.81 in their stretch of audio,
+    while wrong text forced into the same places scored 0.07-0.35. A line that
+    is not really sung there cannot score well, however plausible it reads.
+    """
+
+    def __init__(self):
+        import torch
+        from torchaudio.pipelines import MMS_FA
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = MMS_FA.get_model(dl_kwargs={"model_dir": str(settings.models_dir / "mms")})
+        self.model = model.to(self.device).eval()
+        self.tokenizer, self.aligner = MMS_FA.get_tokenizer(), MMS_FA.get_aligner()
+
+    def place(self, audio, words: list[str], lo: float, hi: float):
+        """For each word, (start, end, confidence) within [lo, hi] seconds -
+        or None for a word with no letters to align ("..." , "-")."""
+        import torch
+
+        # The aligner knows only plain letters; "jaaye," becomes "jaaye".
+        spelled = [re.sub(r"[^a-z']", "", w.lower()) for w in words]
+        timed = [i for i, s in enumerate(spelled) if s]
+        result = [None] * len(words)
+        if not timed:
+            return result
+
+        clip = torch.from_numpy(audio[int(lo * WHISPER_RATE):int(hi * WHISPER_RATE)])
+        with torch.inference_mode():
+            emission, _ = self.model(clip.unsqueeze(0).to(self.device))
+            spans = self.aligner(emission[0], self.tokenizer([spelled[i] for i in timed]))
+
+        seconds_per_frame = clip.shape[0] / emission.shape[1] / WHISPER_RATE
+        for i, letters in zip(timed, spans):
+            result[i] = (round(lo + letters[0].start * seconds_per_frame, 3),
+                         round(lo + letters[-1].end * seconds_per_frame, 3),
+                         float(np.mean([letter.score for letter in letters])))
+        return result
+
+    def fit(self, audio, text: str, lo: float, hi: float) -> float:
+        """0-1: how well the audio in [lo, hi] supports `text` being sung there."""
+        try:
+            scores = [found[2] for found in self.place(audio, text.split(), lo, hi) if found]
+        except Exception:  # noqa: BLE001 - text that cannot be aligned at all fits nothing
+            return 0.0
+        return float(np.mean(scores)) if scores else 0.0
+
+    def close(self) -> None:
+        # Same rule as every model here: give the GPU memory back when done.
+        import torch
+
+        del self.model
+        if self.device == "cuda":
             torch.cuda.empty_cache()
 
 
-def _align_line(line, audio, lo, hi, model, tokenizer, aligner, device) -> None:
-    import torch
+def find_gaps(lines: list[dict], audio, shortest: float = 1.5) -> list[tuple[float, float]]:
+    """Stretches where someone is singing but no lyric line covers it.
 
-    # The aligner knows only plain letters; "jaaye," becomes "jaaye".
-    spelled = [re.sub(r"[^a-z']", "", w["text"].lower()) for w in line["words"]]
-    timed = [i for i, s in enumerate(spelled) if s]
-    if not timed:
-        return
+    Whisper sometimes drops a whole passage - its filters against invented
+    text can throw out a real line sung over heavy music. Those stretches are
+    still plain in the vocal's loudness: as loud as the song's sung lines,
+    with no line over them. Measured on five songs: 7-18s of such stretches on
+    studio recordings, 104s on a live TV clip.
 
-    clip = torch.from_numpy(audio[int(lo * WHISPER_RATE):int(hi * WHISPER_RATE)])
-    with torch.inference_mode():
-        emission, _ = model(clip.unsqueeze(0).to(device))
-        spans = aligner(emission[0], tokenizer([spelled[i] for i in timed]))
+    Some are humming, alaap or talking rather than lyrics; they are hints for
+    where to listen again, not lines in themselves.
+    """
+    loudness = _loudness(audio)
+    fps = WHISPER_RATE / LOUDNESS_HOP
+    frame = lambda t: max(0, int(t * fps))
+    if not lines:
+        return []
 
-    seconds_per_frame = clip.shape[0] / emission.shape[1] / WHISPER_RATE
-    for i, letters in zip(timed, spans):
-        word = line["words"][i]
-        word["start"] = round(lo + letters[0].start * seconds_per_frame, 3)
-        word["end"] = round(lo + letters[-1].end * seconds_per_frame, 3)
+    sung = np.concatenate([loudness[frame(l["start"]):frame(l["end"]) + 1] for l in lines])
+    singing = loudness > float(np.median(sung)) - 12
+    covered = np.zeros(len(loudness), dtype=bool)
+    for line in lines:
+        covered[frame(line["start"] - 0.3):frame(max(line["end"], line.get("held", 0)) + 0.3)] = True
 
-    line["start"] = line["words"][0]["start"]
-    line["end"] = line["words"][-1]["end"]
+    gaps, start = [], None
+    for i, open_ in enumerate(singing & ~covered):
+        if open_ and start is None:
+            start = i
+        elif not open_ and start is not None:
+            gaps.append([start / fps, i / fps])
+            start = None
+    if start is not None:
+        gaps.append([start / fps, len(loudness) / fps])
+
+    merged: list[list[float]] = []
+    for a, b in gaps:  # a breath inside a passage does not split it
+        if merged and a - merged[-1][1] < 1.0:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    return [(round(a, 2), round(b, 2)) for a, b in merged if b - a >= shortest]
 
 
 # The voice counts as stopped once it is this far below the line's own level.

@@ -248,6 +248,32 @@ select {
   text-transform: uppercase; color: var(--ink-2);
 }
 
+/* Section headings - "chorus", "verse" - once an AI correction labelled them.
+   A full-width first item, so it sits above the line's words. */
+.section-tag {
+  flex-basis: 100%; margin-bottom: 0.15rem;
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+
+/* Speech between songs - a host, judges - kept but out of the way. */
+.line.talk { font-size: 0.9rem; font-style: italic; }
+.line.talk .t { color: var(--ink-2); }
+
+/* The AI lyric-correction bar above the sheet: small and out of the way. */
+.lyrics-tools { margin-bottom: 0.6rem; }
+.lyrics-bar { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; min-height: 1.8rem; }
+.lyrics-state { font-size: 0.8rem; color: var(--ink-2); }
+.lyrics-form { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.lyrics-form textarea {
+  width: 100%; resize: vertical; background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.7rem;
+  font: inherit; font-size: 0.88rem; line-height: 1.45;
+}
+.lyrics-form textarea:focus { outline: none; border-color: var(--accent); }
+.lyrics-form .hint { margin: 0; font-size: 0.75rem; color: var(--ink-2); }
+.lyrics-actions { display: flex; align-items: center; gap: 0.8rem; }
+
 /* Bar by bar, for songs without singing: four bars a row, names only. */
 .bar-list {
   position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));

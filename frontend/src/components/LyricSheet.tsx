@@ -71,9 +71,10 @@ export function LyricSheet({ engine, sheet, views }: Props) {
 
   return (
     <div className="sheet" ref={sheetRef} onWheel={handsOff} onTouchMove={handsOff}>
-      {sheet.map((line) =>
+      {sheet.map((line, i) =>
         line.kind === 'lyric' ? (
-          <p key={`l${line.start}`} className="line">
+          <p key={`l${line.start}`} className={`line${line.talk ? ' talk' : ''}`}>
+            {startsSection(sheet, i) && <span className="section-tag">{line.section}</span>}
             {line.words.map((word) => (
               <span
                 key={word.start}
@@ -132,4 +133,16 @@ function ChordSymbol({ view, carried = false }: { view: ChordView; carried?: boo
       {view.name}
     </span>
   )
+}
+
+/** A section heading goes above a line whose section differs from the last
+ *  lyric line's - "chorus" once, not on every chorus line. */
+function startsSection(sheet: SheetLine[], i: number): boolean {
+  const line = sheet[i]
+  if (line.kind !== 'lyric' || !line.section) return false
+  for (let j = i - 1; j >= 0; j--) {
+    const before = sheet[j]
+    if (before.kind === 'lyric') return before.section !== line.section
+  }
+  return true
 }

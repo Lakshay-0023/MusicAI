@@ -25,6 +25,10 @@ gap in this document, not in you.
 > Picking the project up fresh? [`CONTEXT.md`](CONTEXT.md) has the current
 > state, the remaining plan and the settled decisions. This file explains the
 > ideas.
+>
+> Studying the finished system, or preparing to explain it?
+> [`deep-dive/`](deep-dive/README.md) walks through it one part at a time,
+> with the code locations and likely interview questions for each.
 
 ---
 
@@ -44,9 +48,10 @@ gap in this document, not in you.
 12. [Phase 10 — Where the bars start](#12-phase-10--where-the-bars-start)
 13. [Phase 11 — The chords](#13-phase-11--the-chords)
 14. [Phase 12 — Lyrics, and the chord sheet](#14-phase-12--lyrics-and-the-chord-sheet)
-15. [Code structure](#15-code-structure)
-16. [What comes next](#16-what-comes-next)
-17. [Glossary](#17-glossary)
+15. [Phase 13 — AI lyric correction](#15-phase-13--ai-lyric-correction-and-pasting-your-own-lyrics)
+16. [Code structure](#16-code-structure)
+17. [What comes next](#17-what-comes-next)
+18. [Glossary](#18-glossary)
 
 ---
 
@@ -119,6 +124,10 @@ already owns.
 
 ### Install
 
+> The complete, current setup for a new machine, with requirements, model
+> downloads and troubleshooting, is in [`../SETUP.md`](../SETUP.md). The short
+> version:
+
 ```powershell
 # ffmpeg — then open a NEW terminal so PATH updates apply
 winget install ffmpeg
@@ -127,8 +136,9 @@ winget install ffmpeg
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e backend
 
-# CUDA PyTorch — must be installed LAST (see phase 0 for why)
-.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cu121 --force-reinstall --no-deps
+# CUDA PyTorch and torchaudio, matching versions — must be installed LAST
+# (see phase 0 for why)
+.venv\Scripts\python.exe -m pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121 --force-reinstall --no-deps
 
 # Only the plain ONNX Runtime — never the GPU build (see phase 0)
 .venv\Scripts\python.exe -m pip uninstall -y onnxruntime-gpu onnxruntime
@@ -2145,7 +2155,142 @@ Like simple karaoke, and deliberately nothing more:
 
 ---
 
-## 15. Code structure
+## 15. Phase 13 — AI lyric correction, and pasting your own lyrics
+
+**What was built:** an opt-in, per-song **"Fix lyrics with AI"** button, with
+an optional box to **paste the song's lyrics**. Gemini *listens* to the vocal
+track and reads Whisper's lyrics and yours. It corrects misheard words and
+**adds lines Whisper missed**. Then **the audio itself checks every change**
+before it is kept. The version as heard stays one click away.
+
+### The first version, and why it was replaced
+
+The first version sent text only, to the small `gemini-3.5-flash-lite`, with
+one rule: one corrected line for every heard line. With pasted lyrics, on a
+live recording of "Channa Mereya", it made things **worse**:
+
+```
+HEARD: Achchha chalta hun tu aaune aad rakhna  →  Aaccha chalta hoon duaaon mein yaad rakhna  ✓
+HEARD: Jada   (six one-second fragments)        →  "Channa mereya mereya" × 6                  ✗
+HEARD: Mere aav liya                            →  Kitni dafaa, subha ko meri                 ✗
+```
+
+Three design faults caused it:
+- It was **forced to answer every line**, so it crammed the chorus onto
+  fragments it could not place.
+- Its only safety check compared **word counts**, never whether the new words
+  sound like what was heard.
+- It **could not add lines** at all, and missing lines were the real problem:
+  Whisper drops whole passages it is unsure of.
+
+### The design now: the LLM proposes, the audio decides
+
+```
+① gather   vocal stem (sent as a small MP3) + Whisper's lines with timings
+           + "gaps" (singing heard, nothing transcribed) + pasted lyrics
+② Gemini   listens and reads; for every heard line: keep / correct / not lyrics,
+           plus an INSERT, with its time, for every sung line Whisper missed
+③ check    every change against the audio with the forced aligner
+④ retry    rejected suggestions go back once, with the reason
+⑤ re-time  the changed lines precisely; untouched lines keep their times
+```
+
+**Model:** `gemini-3.8-flash`, Google's strongest stable Flash. The task is
+judgment (listening, matching, deciding what is really sung), and the
+smaller model did not have enough of it. Two settings follow Google's
+guidance for Gemini 3:
+- **Temperature left at its default.** Lowering it can cause looping and
+  worse answers.
+- **Thinking at "high".**
+
+The audio is put first and the instructions last, as Google advises for large
+inputs.
+
+**The prompt** is written around rules a good human transcriber follows:
+- **Every heard line gets a decision.** "keep" and "not lyrics" are valid
+  answers, so it is never forced to pick a line.
+- **What is sung, not what is written.** The pasted lyrics supply wording and
+  spelling only, while this recording supplies the repeats, the order and the
+  omissions.
+- **Line boundaries:** never pull words in from a neighbouring line, never
+  "complete" a fragment.
+- **Minimal change:** "when unsure between keep and correct, choose keep".
+- **Spelling conventions,** with examples.
+- **Six worked examples,** including the exact failure above ("a fragment is
+  NOT a place to put a whole lyric line").
+
+### The audio as fact-checker
+
+The forced aligner, which times words, can also say **how well the audio
+supports some words being sung in a given place**. A line that is not sung
+there cannot score well, however plausible it reads. Measured:
+
+| Check | Rule | Why |
+| --- | --- | --- |
+| **A correction** | Fits ≥ 0.35, and not much worse than the heard text in the same place | Good corrections fitted 0.39–0.81; the chorus forced onto fragments 0.07–0.24 |
+| **An inserted line** | Must not overlap any heard line | If something was heard there, the right move is to correct that line |
+| | Must beat **its own letters scrambled** by ≥ 0.17, and fit ≥ 0.30 | See below |
+
+**Why the scramble.** At first an inserted line only needed a fixed score.
+Then a made-up line placed during the judges' talking *passed*. In dense
+speech **any** text fits 0.43–0.52, because there are speech sounds
+everywhere to latch onto. So each insert is compared with a nonsense control:
+the same letters, reversed, in the same place. Busy audio raises both scores,
+and only words really sung pull ahead. Over three songs, true lines beat
+their scramble by **+0.18 to +0.49**, and fakes by at most **+0.15**. That
+margin is narrow, so it is worth watching on more songs. A single, very long
+held word cannot be scored at all, so an insert like that is rejected. That
+errs on the safe side.
+
+**The retry.** Rejections go back to Gemini once, in plain words: *"H26
+correct → 'Channa mereya mereya': not supported by the audio (fit 0.07; the
+heard text fits 0.14)"* or *"insert at 6:16: heard line H52 is already at
+that time — correct H52 instead"*. What still fails is dropped, and the line
+stays as heard.
+
+**Tested end to end,** with a stand-in for Gemini so the outcome is known:
+
+| Case | Result |
+| --- | --- |
+| A real line hidden from the heard lines, inserted at its true time | **accepted**, restored at 69.6 s |
+| Good corrections | accepted |
+| The chorus forced onto "Mere ya mere ya" and "Jada" | rejected |
+| A made-up line during the talking | rejected (overlaps heard lines) |
+| A wrong lyric inserted into a real singing gap | rejected (no better than its scramble) |
+
+### Untouched lines are never re-timed
+
+Aligning an already-timed line a second time is **not stable on long held
+words**: the window shifts slightly, and a held "Besabriyaa…n" moved from
+35.3 s to 38.8 s when re-run. So after a correction only the changed lines
+are re-timed. Measured: 66 untouched lines, 0 words moved.
+
+### Wrong song? Checked first, for free
+
+Before anything is sent, the pasted lyrics are compared with what was heard,
+offline, using **word pairs** ("dil hai", "tere bina"). Single words were not
+enough, because songs share "hai", "mera" and "dil". The same song scored
+69–100%, a different song 2–3%. Under 25%, the app asks before going on.
+Gemini gives its own verdict as well.
+
+### What is sent
+
+The vocal stem as a small mono MP3 (about 0.5 MB a minute) and lyrics text,
+only when the button is pressed. Whisper's version is kept (`heardLines`):
+"As heard" to compare, "undo" to restore.
+
+### Measuring it, not trusting it
+
+`woodshed score "song.mp3" --truth correct.txt` reports two numbers, for
+Whisper alone and for the AI version:
+- **Word error rate:** the share of words wrong. Spelling variants count as
+  right.
+- **Lines missing:** the share of the correct lyrics' lines that appear
+  nowhere. This is the failure word error rate blurs.
+
+---
+
+## 16. Code structure
 
 ### The repository
 
@@ -2295,7 +2440,7 @@ No new layer, no change to anything that already works.
 
 ---
 
-## 16. What comes next
+## 17. What comes next
 
 | Phase | What | Status |
 | --- | --- | --- |
@@ -2331,7 +2476,7 @@ you pay for GPU time and take on responsibility for other people's music).
 
 ---
 
-## 17. Glossary
+## 18. Glossary
 
 | Term | Meaning |
 | --- | --- |
@@ -2365,6 +2510,8 @@ you pay for GPU time and take on responsibility for other people's music).
 | **Attention** | A layer that lets each frame weigh every other frame when deciding what it is |
 | **Dropout** | Randomly blanking parts of a network during training; switched off by `model.eval()` |
 | **Normalisation** | Scaling inputs by the training data's mean and spread, so the model sees familiar numbers |
+| **WER (word error rate)** | The share of words wrong: edits needed to reach the correct lyrics ÷ their length |
+| **Structured output** | Making a language model answer in a fixed JSON shape that code can check |
 | **Speech recognition (ASR)** | Turning spoken or sung audio into written words |
 | **Whisper** | OpenAI's open-source speech recognition model; runs locally |
 | **Half precision (fp16)** | Storing numbers in 16 bits instead of 32: half the memory, same answers for inference |

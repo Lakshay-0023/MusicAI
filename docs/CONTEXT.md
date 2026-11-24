@@ -742,9 +742,53 @@ a model like this one (Chordify).
     - **`sheet.ts`:** a chord in the last quarter of a word with the next word
       within a beat (+0.15 s) is anticipating that word, and the tail rule
       uses `held`.
-  - **Still to do from that research:** an LLM correction and romanisation
-    pass (he will decide later, postponed); AcoustID + LRCLIB for released
-    songs (opt-in); testing ChordFormer vs BTC.
+  - **Chunked separation (2026-10-09):** 30 s chunks with a 4 s crossfade;
+    see hardware memory.
+  - **AI lyric correction built (2026-10-10).**
+    - **He chose Gemini (he has a Gemini key, not Anthropic) and a small
+      model:** `settings.llm_model = "gemini-3.5-flash-lite"`, using
+      `google-genai` `client.models.generate_content` with
+      `response_schema=` a Pydantic class. The key comes from
+      `GEMINI_API_KEY`. The provider is isolated in `woodshed/ai/gemini.py`.
+    - **`woodshed/ai/polish.py`** works 1:1 per line (the structure comes
+      from Whisper). Pasted lyrics are optional and supply the wording.
+    - The free mismatch check uses **word pairs**: same song 69–100%,
+      different 2–3%, threshold 0.25.
+    - Answers are validated line by line, and `heardLines` is kept for undo
+      and the "As heard" toggle.
+    - After applying, `_time_words` re-aligns.
+    - Lines get a `section` (shown as headings) and a `corrected` flag.
+      Whisper words now also save `heard` (Devanagari) and `p` (confidence).
+  - **Routes:** POST `/tracks/{id}/lyrics/polish` {lyrics, force} (409 means
+    a mismatch, 503 means the AI is unavailable) and `/lyrics/restore`.
+  - **CLI:** `woodshed polish song [--lyrics f] [--force] [--undo]` and
+    `woodshed score song --truth f` (word error rate, with spelling variants
+    counted as equal).
+  - **UI:** `LyricsTools.tsx` bar above the sheet.
+  - **Verified offline** with a stand-in model; **not yet run against real
+    Gemini.** He needs `pip install google-genai` and `GEMINI_API_KEY`.
+  - **v1 made things worse on his test** (live "Channa Mereya", pasted
+    lyrics): it forced the chorus onto fragments and couldn't add missing
+    lines.
+  - **Redesigned 2026-10-11 with his approval; he OK'd sending the vocal
+    audio to Gemini.**
+    - Model `gemini-3.8-flash`, with Gemini 3 settings: default temperature,
+      thinking HIGH.
+    - The vocal MP3 is sent as a Part, with a detailed prompt and examples.
+    - Decisions are keep/correct/not_lyrics plus `insert`; `find_gaps` flags
+      singing that has no lines.
+    - **Audio fact-check** via `lyrics.Aligner.fit`:
+      - A correction must fit ≥ 0.35 and be ≥ heard − 0.20.
+      - An insert must not overlap heard lines, must fit ≥ 0.30, and must
+        lead its reversed-letters scramble by ≥ 0.17 (dense speech fits any
+        text at 0.43–0.52; true lines lead by 0.18–0.49, fakes by ≤ 0.15).
+    - One retry with the rejection reasons.
+    - Only corrected lines are re-timed, because re-aligning held words is
+      unstable (35.3 → 38.8 s).
+  - `woodshed score` also reports lines missing.
+  - **Still to do:** run it on real Gemini and score it; AcoustID + LRCLIB
+    (opt-in); ChordFormer vs BTC; the aligner low-RAM loader (he declined it
+    for now).
   - **Don't run two GPU jobs at once** (e.g. the CLI while the server is
     analysing). One transient CUDA error happened, probably from that.
 - BTC cannot name inversions.

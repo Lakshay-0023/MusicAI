@@ -22,6 +22,8 @@ interface Props {
   lyrics: LyricLine[] | null
   lyricsStatus: LoadStatus
   onRetryLyrics: () => void
+  /** The AI-correction bar, shown above the lyrics when there are any. */
+  lyricsTools?: React.ReactNode
   display: Display
   onCapo: (capo: number) => void
   onSimplify: (simplify: boolean) => void
@@ -75,7 +77,10 @@ export function ChordPanel(props: Props) {
       {ready && (
         <>
           {sheet.length > 0 ? (
-            <LyricSheet engine={engine} sheet={sheet} views={views} />
+            <>
+              {props.lyricsTools}
+              <LyricSheet engine={engine} sheet={sheet} views={views} />
+            </>
           ) : (
             <>
               {lyricsStatus === 'loading' && (

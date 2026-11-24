@@ -46,6 +46,15 @@ export interface LyricLine {
   /** When the voice actually stops - can be well after the last word, on a
    *  held note or a fade. */
   held?: number
+  /** Verse, chorus... - set by an AI correction. */
+  section?: string
+  /** True when an AI correction changed this line. */
+  corrected?: boolean
+  /** True for a sung line the transcription missed, added by the AI and
+   *  confirmed against the audio. */
+  inserted?: boolean
+  /** Speech, applause, a host or judges - not lyrics. Shown dimmed. */
+  talk?: boolean
   words: LyricWord[]
 }
 
@@ -54,6 +63,20 @@ export interface LyricsData {
   language: string
   lines: LyricLine[]
   method: string
+  /** After an AI correction: exactly what was heard, kept for comparison and undo. */
+  heardLines?: LyricLine[]
+  /** Present once lyrics have been corrected with AI. */
+  polish?: {
+    model: string
+    pasted: boolean
+    match: number | null
+    corrected: number
+    inserted: number
+    talk: number
+    rejected: number
+    retried: boolean
+    changedLines: number
+  }
 }
 
 export interface Job {

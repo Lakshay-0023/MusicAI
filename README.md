@@ -9,12 +9,16 @@ dropping in key, loop four bars until they are clean.
 
 ## Run it
 
+Setting up needs a few steps in a specific order (the GPU build of PyTorch has
+to be installed last), so follow **[SETUP.md](SETUP.md)**. In short, once
+installed:
+
 ```powershell
-pip install -e backend
-woodshed serve
+woodshed serve                 # terminal 1: the backend, on :8000
+cd frontend; npm run dev       # terminal 2: the app, on :5173
 ```
 
-Then open http://127.0.0.1:8000
+Then open http://localhost:5173
 
 ## Layout
 

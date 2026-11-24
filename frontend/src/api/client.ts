@@ -13,6 +13,34 @@ async function get<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
+/** A refusal from the server that carries a reason worth showing. */
+export class ApiError extends Error {
+  status: number
+  detail: Record<string, unknown>
+
+  constructor(status: number, detail: Record<string, unknown>) {
+    super(String(detail.message ?? `request failed (${status})`))
+    this.status = status
+    this.detail = detail
+  }
+}
+
+async function post<T>(path: string, body: unknown = {}): Promise<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { detail?: unknown }
+    const detail = typeof payload.detail === 'object' && payload.detail
+      ? (payload.detail as Record<string, unknown>)
+      : { message: String(payload.detail ?? response.statusText) }
+    throw new ApiError(response.status, detail)
+  }
+  return response.json() as Promise<T>
+}
+
 export const api = {
   tracks: () => get<Track[]>('/tracks'),
 
@@ -23,6 +51,17 @@ export const api = {
   chords: (id: string) => get<ChordData>(`/tracks/${id}/chords`),
 
   lyrics: (id: string) => get<LyricsData>(`/tracks/${id}/lyrics`),
+
+  /**
+   * Correct the lyrics with AI, optionally following lyrics the player pasted.
+   * Sends lyrics text only. A 409 means the pasted lyrics look like another
+   * song; `force` sends them anyway.
+   */
+  polishLyrics: (id: string, lyrics: string | null, force = false) =>
+    post<LyricsData>(`/tracks/${id}/lyrics/polish`, { lyrics, force }),
+
+  /** Undo an AI correction: back to exactly what was heard. */
+  restoreLyrics: (id: string) => post<LyricsData>(`/tracks/${id}/lyrics/restore`),
 
   /**
    * Hand the server a song and get a ticket back, immediately.

@@ -38,5 +38,15 @@ def write_opus_copies(folder: Path) -> None:
         _run(["-i", str(wav), "-c:a", "libopus", "-b:a", settings.opus_bitrate, str(opus)])
 
 
+def compact_mp3(wav: Path, out: Path) -> Path:
+    """A small mono MP3 of a stem, for sending somewhere: ~0.5MB a minute.
+
+    Mono at 64kbps keeps every word clear - it is speech-quality, not
+    listening-quality - while a 7-minute vocal stays around 3-4MB.
+    """
+    _run(["-i", str(wav), "-ac", "1", "-ar", "22050", "-b:a", "64k", str(out)])
+    return out
+
+
 def _run(args: list[str]) -> None:
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args], check=True)

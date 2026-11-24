@@ -29,6 +29,10 @@ export type SheetLine =
       /** Chords played after the last word, before the line has really
        *  finished - written at the end of the line, as a chart would. */
       tail: number[]
+      /** Verse, chorus... when an AI correction has labelled the lines. */
+      section?: string
+      /** Speech rather than lyrics. */
+      talk?: boolean
     }
   | { kind: 'instrumental'; start: number; label: string; chords: number[] }
 
@@ -47,6 +51,8 @@ export function buildSheet(lines: LyricLine[], chords: Chord[], beats: BeatData 
     start: line.start,
     words: line.words.map((word): SheetWord => ({ ...word, chords: [], carried: null })),
     tail: [] as number[],
+    section: line.section,
+    talk: line.talk,
     /** When the voice stops: the last word's end, or later on a held note. */
     held: Math.max(line.held ?? 0, line.words[line.words.length - 1]?.end ?? 0),
   }))

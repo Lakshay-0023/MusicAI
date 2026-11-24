@@ -75,6 +75,18 @@ class Settings:
     # told. Hindi mode copes with the odd English word in a Bollywood lyric.
     lyrics_language: str = "hi"
 
+    # The language model that completes and corrects lyrics (see woodshed/ai).
+    # It is sent the vocal stem (as a small MP3) and the lyrics text - only
+    # when asked for, per song. Flash rather than Flash-Lite: the job is
+    # judgment (listening, matching, deciding what is really sung), and the
+    # smaller model forced the chorus onto fragments it could not place.
+    # The key is read from the GEMINI_API_KEY environment variable.
+    llm_model: str = "gemini-3.8-flash"
+
+    # Pasted lyrics sharing fewer of their words with what was heard than
+    # this are taken to be a different song, and refused unless forced.
+    lyrics_match_threshold: float = 0.25
+
     @property
     def web_dir(self) -> Path:
         """The built front end, when there is one.

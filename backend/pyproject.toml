@@ -33,6 +33,7 @@ dependencies = [
     "tqdm",
     "tiktoken",             # used by Whisper
     "more-itertools",
+    "google-genai",         # AI lyric correction (opt-in); does not touch torch
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
